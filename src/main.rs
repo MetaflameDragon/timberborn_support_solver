@@ -5,7 +5,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 fn main() {
     // let mut instance = SatInstance::new();
 
-    // instance
+    // let grid: Grid<bool> = Grid::new(Dimensions::new(10, 10));
 
     // let mut solver = Glucose::default();
 }
@@ -63,22 +63,6 @@ impl Iterator for IterManhattan {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::Point;
-    use assertables::{assert_all, assert_len_eq_x};
-    use std::slice::Windows;
-
-    #[test]
-    fn iter_manhattan() {
-        let c = Point { x: 1, y: 2 };
-        let manhattan_points = c.iter_within_manhattan(3).collect::<Vec<_>>();
-        assert_len_eq_x!(manhattan_points, 1 + 3 + 5 + 7 + 5 + 3 + 1);
-        let order_predicate = |a: Point, b: Point| a.y < b.y || a.y == b.y && a.x < b.x;
-        assert_all!(manhattan_points.windows(2), |pair: &[Point]| order_predicate(*&pair[0], *&pair[1]));
-    }
-}
-
 impl Dimensions {
     pub const fn new(width: usize, height: usize) -> Self {
         Dimensions { width, height }
@@ -89,6 +73,76 @@ impl Dimensions {
             && point.x < self.width as isize
             && point.y >= 0
             && point.y < self.height as isize
+    }
+
+    /// Iterates points within this rectangle.
+    /// For yielded points, `0 <= x < self.x` and `0 <= y < self.y`.
+    pub const fn iter_within(self) -> DimensionsIter {
+        DimensionsIter::new(self)
+    }
+}
+
+/// Iterates exclusively - yielded values are never equal to the x or y of
+/// `dims`
+struct DimensionsIter {
+    dims: Dimensions,
+    current: Point,
+}
+
+impl DimensionsIter {
+    pub const fn new(dims: Dimensions) -> Self {
+        DimensionsIter {
+            dims,
+            current: Point::new(0, 0),
+        }
+    }
+}
+
+impl Iterator for DimensionsIter {
+    type Item = Point;
+    fn next(&mut self) -> Option<Self::Item> {
+        // Note: iterates exclusively!
+        if self.current.y >= self.dims.height as isize {
+            return None;
+        }
+        let val = self.current;
+
+        // Step x, step y and reset x if out of bounds
+        self.current.x += 1;
+        if self.current.x >= self.dims.width as isize {
+            self.current.x = 0;
+            self.current.y += 1;
+        }
+
+        Some(val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Dimensions, Point};
+    use assertables::{assert_all, assert_len_eq_x};
+    use std::slice::Windows;
+
+    #[test]
+    fn iter_manhattan() {
+        let c = Point { x: 1, y: 2 };
+        let manhattan_points = c.iter_within_manhattan(3).collect::<Vec<_>>();
+
+        assert_len_eq_x!(manhattan_points, 1 + 3 + 5 + 7 + 5 + 3 + 1);
+        let order_predicate = |a: Point, b: Point| a.y < b.y || a.y == b.y && a.x < b.x;
+        assert_all!(manhattan_points.windows(2), |pair: &[Point]| {
+            order_predicate(*&pair[0], *&pair[1])
+        });
+    }
+
+    #[test]
+    fn iter_dims() {
+        let dims = Dimensions::new(7, 9);
+        let points = dims.iter_within().collect::<Vec<_>>();
+
+        assert_len_eq_x!(points, 7 * 9);
+        assert_all!(points.iter(), |p: &Point| dims.contains(*p))
     }
 }
 
