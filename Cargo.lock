@@ -277,14 +277,6 @@ dependencies = [
 
 [[package]]
 name = "rustsat"
-version = "0.1.0"
-dependencies = [
- "rustsat 0.7.2",
- "rustsat-glucose",
-]
-
-[[package]]
-name = "rustsat"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8024cc8ccecbbc460112d5915d9025e1e9b05141d9510c4566ce9f7b2395cb87"
@@ -308,8 +300,16 @@ dependencies = [
  "bindgen",
  "cmake",
  "cpu-time",
- "rustsat 0.7.2",
+ "rustsat",
  "thiserror",
+]
+
+[[package]]
+name = "rustsat-playground"
+version = "0.1.0"
+dependencies = [
+ "rustsat",
+ "rustsat-glucose",
 ]
 
 [[package]]
