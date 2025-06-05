@@ -318,6 +318,7 @@ dependencies = [
  "assertables",
  "rustsat",
  "rustsat-glucose",
+ "thiserror",
 ]
 
 [[package]]

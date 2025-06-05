@@ -1,16 +1,17 @@
 use crate::point::Point;
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
-    OutOfMemory,
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, ManageVars, SatInstance},
     solvers::{Solve, SolverResult},
-    types::{Assignment, Clause, Var, constraints::CardConstraint},
+    types::{constraints::CardConstraint, Assignment, Clause, Var},
+    OutOfMemory,
 };
 use rustsat_glucose::core::Glucose;
 use std::collections::HashMap;
+use thiserror::Error;
 
 mod dimensions;
 mod grid;
@@ -26,8 +27,20 @@ fn main() -> anyhow::Result<()> {
         let mut solver = Glucose::default();
 
         println!("Solving for n <= {max_cardinality}...");
-        let sol = try_solve(&mut solver, instance.clone(), max_cardinality, &point_map)
-            .context("error while solving")?;
+        let sol = match try_solve(&mut solver, instance.clone(), max_cardinality, &point_map) {
+            Ok(sol) => sol,
+            Err(SolveError::Unsat) => {
+                println!("Unsat");
+                break;
+            }
+            Err(SolveError::Interrupted) => {
+                println!("Interrupted!");
+                break;
+            }
+            Err(SolveError::Other(err)) => {
+                bail!(err)
+            }
+        };
 
         let grid = Grid::from_map(dims, |p| {
             sol.var_value(*point_map.get(&p).unwrap())
@@ -46,12 +59,22 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Error, Debug)]
+enum SolveError {
+    #[error("unsatisfiable")]
+    Unsat,
+    #[error("interrupted")]
+    Interrupted,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 fn try_solve(
     solver: &mut Glucose,
     instance: SatInstance<BasicVarManager>,
     max_cardinality: usize,
     point_map: &HashMap<Point, Var>,
-) -> anyhow::Result<Assignment> {
+) -> Result<Assignment, SolveError> {
     let (cnf, mut var_manager) = instance.into_cnf();
 
     solver.add_cnf(cnf).context("Failed to add clause")?;
@@ -62,16 +85,12 @@ fn try_solve(
     card::encode_cardinality_constraint::<Totalizer, _>(upper_constraint, solver, &mut var_manager)
         .context("failed to encode cardinality constraint")?;
 
-    let res = solver.solve();
-
-    match res {
-        Ok(SolverResult::Sat) => solver.full_solution().context("Failed to full solution"),
-        Ok(other) => {
-            bail!(other)
-        }
-        Err(err) => {
-            bail!(err)
-        }
+    match solver.solve().context("error while solving")? {
+        SolverResult::Sat => Ok(solver
+            .full_solution()
+            .context("Failed to get full solution")?),
+        SolverResult::Unsat => Err(SolveError::Unsat),
+        SolverResult::Interrupted => Err(SolveError::Interrupted),
     }
 }
 
