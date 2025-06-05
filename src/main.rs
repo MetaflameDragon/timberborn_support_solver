@@ -1,13 +1,13 @@
 use crate::point::Point;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
+    OutOfMemory,
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, ManageVars, SatInstance},
     solvers::{Solve, SolverResult},
-    types::{constraints::CardConstraint, Assignment, Clause, Var},
-    OutOfMemory,
+    types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::core::Glucose;
 use std::collections::HashMap;
