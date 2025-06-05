@@ -3,8 +3,11 @@ use rustsat_glucose::core::Glucose;
 use std::ops::{Add, Mul, Neg, Sub};
 
 fn main() {
-    let mut instance = SatInstance::new();
-    let mut solver = Glucose::default();
+    // let mut instance = SatInstance::new();
+
+    // instance
+
+    // let mut solver = Glucose::default();
 }
 
 // The math is a mess but whatever
@@ -19,6 +22,61 @@ struct Point {
 struct Dimensions {
     pub width: usize,
     pub height: usize,
+}
+
+struct IterManhattan {
+    center: Point,
+    dist: usize,
+    iter_point_rel: Point,
+}
+
+impl IterManhattan {
+    pub const fn new(center: Point, dist: usize) -> Self {
+        IterManhattan {
+            center,
+            dist,
+            iter_point_rel: Point::new(0, -(dist as isize)),
+        }
+    }
+}
+
+impl Iterator for IterManhattan {
+    type Item = Point;
+    fn next(&mut self) -> Option<Self::Item> {
+        // Going from bottom to top
+        // If past the top, the iterator is done
+        if self.iter_point_rel.y > self.dist as isize {
+            return None;
+        }
+
+        // Absolute position
+        let val = self.iter_point_rel + self.center;
+
+        // Step x, step y if that would go past the maximum distance
+        self.iter_point_rel.x += 1;
+        if self.iter_point_rel.manhattan_mag() > self.dist {
+            self.iter_point_rel.y += 1;
+            self.iter_point_rel.x = -(self.dist as isize - self.iter_point_rel.y.abs());
+        }
+
+        Some(val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Point;
+    use assertables::{assert_all, assert_len_eq_x};
+    use std::slice::Windows;
+
+    #[test]
+    fn iter_manhattan() {
+        let c = Point { x: 1, y: 2 };
+        let manhattan_points = c.iter_within_manhattan(3).collect::<Vec<_>>();
+        assert_len_eq_x!(manhattan_points, 1 + 3 + 5 + 7 + 5 + 3 + 1);
+        let order_predicate = |a: Point, b: Point| a.y < b.y || a.y == b.y && a.x < b.x;
+        assert_all!(manhattan_points.windows(2), |pair: &[Point]| order_predicate(*&pair[0], *&pair[1]));
+    }
 }
 
 impl Dimensions {
@@ -52,6 +110,10 @@ impl Point {
 
     pub fn manhattan_to(self, other: Point) -> usize {
         (self - other).manhattan_mag()
+    }
+
+    pub const fn iter_within_manhattan(self, dist: usize) -> IterManhattan {
+        IterManhattan::new(self, dist)
     }
 }
 
