@@ -1,13 +1,22 @@
 use rustsat::types::Lit;
-use std::ops::{Add, Mul, Neg, Sub};
+use std::{
+    fmt::{Display, Formatter},
+    ops::{Add, Mul, Neg, Sub},
+};
 // The math is a mess but whatever
 
 pub type PointTy = i16;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Point {
     pub x: PointTy,
     pub y: PointTy,
+}
+
+impl Display for Point {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "({}, {})", self.x, self.y)
+    }
 }
 
 impl Point {
