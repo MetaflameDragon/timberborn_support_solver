@@ -21,6 +21,10 @@ impl<T> Grid<T> {
             dims,
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.data.iter()
+    }
 }
 
 impl<T: Default + Clone> Grid<T> {

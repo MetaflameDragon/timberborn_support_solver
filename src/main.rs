@@ -1,10 +1,16 @@
 use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
-    encodings::card::{BoundUpper, Totalizer},
+    encodings::{
+        card,
+        card::{BoundUpper, Totalizer},
+    },
     instances::{BasicVarManager, ObjectVarManager, SatInstance},
     solvers::{Solve, SolverResult},
-    types::Clause,
+    types::{
+        Clause,
+        constraints::{CardConstraint, CardUbConstr},
+    },
 };
 use rustsat_glucose::core::Glucose;
 use std::{
@@ -46,9 +52,19 @@ fn main() {
     solver.add_cnf(cnf).expect("Failed to add clause");
 
     let max_cardinality = 10;
-    rustsat::encodings::card::new_default_ub()
-        .encode_ub(..=max_cardinality, &mut solver, &mut var_manager)
-        .expect("Failed to encode cardinality");
+    // card::new_default_ub()
+    //     .encode_ub(..=max_cardinality, &mut solver, &mut var_manager)
+    //     .expect("Failed to encode cardinality");
+
+    let upper_constraint =
+        CardConstraint::new_ub(point_map.values().map(|var| var.pos_lit()), max_cardinality);
+
+    card::encode_cardinality_constraint::<Totalizer, _>(
+        upper_constraint,
+        &mut solver,
+        &mut var_manager,
+    )
+    .expect("Failed to encode cardinality");
 
     let res = solver.solve();
 
@@ -60,13 +76,13 @@ fn main() {
 
             match sol {
                 Ok(sol) => {
-                    let positive_lits: Vec<_> = sol.iter().filter(|lit| lit.is_pos()).collect();
-                    println!("Solution: ({} positive)", positive_lits.len());
-
                     let grid = Grid::from_map(dims, |p| {
                         sol.var_value(*point_map.get(&p).unwrap())
                             .to_bool_with_def(false)
                     });
+
+                    let marked_count = grid.iter().filter(|&&x| x).count();
+                    println!("Solution: ({} marked)", marked_count);
 
                     print_grid(&grid, |b| {
                         b.then_some(block_char::FULL)
