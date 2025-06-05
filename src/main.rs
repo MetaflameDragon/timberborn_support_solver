@@ -68,7 +68,10 @@ fn main() {
                             .to_bool_with_def(false)
                     });
 
-                    print_grid(&grid, |b| b.then_some('X').unwrap_or('O'));
+                    print_grid(&grid, |b| {
+                        b.then_some(block_char::FULL)
+                            .unwrap_or(block_char::LIGHT_SHADE)
+                    });
                 }
                 Err(err) => {
                     print!("Error: {:?}", err);
@@ -93,7 +96,12 @@ fn main() {
 
 fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
     for row in grid.iter_rows() {
-        row.iter().map(&map_fn).for_each(|x| print!("{}", x));
+        row.iter().map(&map_fn).for_each(|x| print!("{}  ", x));
         println!();
     }
+}
+
+mod block_char {
+    pub const FULL: char = '\u{2588}';
+    pub const LIGHT_SHADE: char = '\u{2591}';
 }
