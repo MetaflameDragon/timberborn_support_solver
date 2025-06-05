@@ -4,22 +4,13 @@ use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
     OutOfMemory,
-    encodings::{
-        CollectClauses, card,
-        card::{BoundUpper, Totalizer},
-    },
-    instances::{BasicVarManager, Cnf, ManageVars, ObjectVarManager, SatInstance},
+    encodings::{card, card::Totalizer},
+    instances::{BasicVarManager, ManageVars, SatInstance},
     solvers::{Solve, SolverResult},
-    types::{
-        Assignment, Clause, Var,
-        constraints::{CardConstraint, CardUbConstr},
-    },
+    types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::core::Glucose;
-use std::{
-    collections::HashMap,
-    ops::{Add, Mul, Neg, Sub},
-};
+use std::collections::HashMap;
 
 mod dimensions;
 mod grid;
@@ -44,7 +35,7 @@ fn main() -> anyhow::Result<()> {
         });
 
         let marked_count = grid.iter().filter(|&&x| x).count();
-        println!("Solution: ({} marked)", marked_count);
+        println!("Solution: ({marked_count} marked)");
 
         print_grid(&grid, |b| {
             b.then_some(block_char::FULL)
@@ -56,7 +47,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn try_solve(
-    mut solver: &mut Glucose,
+    solver: &mut Glucose,
     instance: SatInstance<BasicVarManager>,
     max_cardinality: usize,
     point_map: &HashMap<Point, Var>,
@@ -110,7 +101,7 @@ fn build_clauses(
 
 fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
     for row in grid.iter_rows() {
-        row.iter().map(&map_fn).for_each(|x| print!("{}  ", x));
+        row.iter().map(&map_fn).for_each(|x| print!("{x}  "));
         println!();
     }
 }

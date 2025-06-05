@@ -25,7 +25,7 @@ impl Point {
     }
 
     pub const fn manhattan_mag(self) -> usize {
-        self.x.abs() as usize + self.y.abs() as usize
+        self.x.unsigned_abs() as usize + self.y.unsigned_abs() as usize
     }
 
     pub const fn abs(self) -> Self {
