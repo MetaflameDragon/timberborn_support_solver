@@ -31,25 +31,26 @@ fn main() -> anyhow::Result<()> {
 
     let point_map = build_clauses(&mut instance, dims).context("failed to build clauses")?;
 
-    let max_cardinality = 10;
+    for max_cardinality in (1..=10).rev() {
+        let mut solver = Glucose::default();
 
-    let mut solver = Glucose::default();
+        println!("Solving for n <= {max_cardinality}...");
+        let sol = try_solve(&mut solver, instance.clone(), max_cardinality, &point_map)
+            .context("error while solving")?;
 
-    let sol = try_solve(&mut solver, instance.clone(), max_cardinality, &point_map)
-        .context("error while solving")?;
+        let grid = Grid::from_map(dims, |p| {
+            sol.var_value(*point_map.get(&p).unwrap())
+                .to_bool_with_def(false)
+        });
 
-    let grid = Grid::from_map(dims, |p| {
-        sol.var_value(*point_map.get(&p).unwrap())
-            .to_bool_with_def(false)
-    });
+        let marked_count = grid.iter().filter(|&&x| x).count();
+        println!("Solution: ({} marked)", marked_count);
 
-    let marked_count = grid.iter().filter(|&&x| x).count();
-    println!("Solution: ({} marked)", marked_count);
-
-    print_grid(&grid, |b| {
-        b.then_some(block_char::FULL)
-            .unwrap_or(block_char::LIGHT_SHADE)
-    });
+        print_grid(&grid, |b| {
+            b.then_some(block_char::FULL)
+                .unwrap_or(block_char::LIGHT_SHADE)
+        });
+    }
 
     Ok(())
 }
