@@ -9,6 +9,18 @@ impl<T> Grid<T> {
     pub const fn dims(&self) -> Dimensions {
         self.dims
     }
+
+    pub fn iter_rows(&self) -> impl Iterator<Item = &[T]> {
+        debug_assert_eq!(self.data.len() % self.dims.width as usize, 0);
+        self.data.chunks_exact(self.dims.width as usize)
+    }
+
+    pub fn from_map(dims: Dimensions, map_fn: impl Fn(Point) -> T) -> Self {
+        Grid {
+            data: dims.iter_within().map(&map_fn).collect(),
+            dims,
+        }
+    }
 }
 
 impl<T: Default + Clone> Grid<T> {

@@ -19,16 +19,14 @@ mod point;
 fn main() {
     let mut instance: SatInstance<ObjectVarManager> = SatInstance::new();
 
-    let grid: Grid<bool> = Grid::new(Dimensions::new(10, 10));
-
-    let dims = grid.dims();
+    let dims = Dimensions::new(10, 10);
 
     let mut point_map = HashMap::new();
 
     let var_manager = instance.var_manager_mut();
     for p in dims.iter_within() {
         let var = var_manager.object_var(p);
-        point_map.insert(var, p);
+        point_map.insert(p, var);
     }
 
     for point in dims.iter_within() {
@@ -65,11 +63,12 @@ fn main() {
                     let positive_lits: Vec<_> = sol.iter().filter(|lit| lit.is_pos()).collect();
                     println!("Solution: ({} positive)", positive_lits.len());
 
-                    for lit in positive_lits {
-                        let var = lit.var();
-                        let point = point_map.get(&var).unwrap();
-                        println!("{} ({})", point, lit);
-                    }
+                    let grid = Grid::from_map(dims, |p| {
+                        sol.var_value(*point_map.get(&p).unwrap())
+                            .to_bool_with_def(false)
+                    });
+
+                    print_grid(&grid, |b| b.then_some('X').unwrap_or('O'));
                 }
                 Err(err) => {
                     print!("Error: {:?}", err);
@@ -90,4 +89,11 @@ fn main() {
             return;
         }
     };
+}
+
+fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
+    for row in grid.iter_rows() {
+        row.iter().map(&map_fn).for_each(|x| print!("{}", x));
+        println!();
+    }
 }
