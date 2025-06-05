@@ -8,3 +8,4 @@ resolver = "3"
 rustsat-glucose = { version = "0.7.2", features = [] }
 rustsat = { version = "0.7.2", features = [] }
 assertables = "9.5.5"
+anyhow = "1.0.98"
