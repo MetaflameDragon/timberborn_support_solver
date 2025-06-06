@@ -9,7 +9,7 @@ use rustsat::{
     solvers::{Solve, SolverResult},
     types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
-use rustsat_glucose::core::Glucose;
+use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -19,12 +19,12 @@ mod point;
 
 fn main() -> anyhow::Result<()> {
     let mut instance: SatInstance<BasicVarManager> = SatInstance::new();
-    let dims = Dimensions::new(10, 10);
+    let dims = Dimensions::new(17, 16);
 
     let point_map = build_clauses(&mut instance, dims).context("failed to build clauses")?;
 
-    for max_cardinality in (1..=10).rev() {
-        let mut solver = Glucose::default();
+    for max_cardinality in (1..=20).rev() {
+        let mut solver = GlucoseSimp::default();
 
         println!("Solving for n <= {max_cardinality}...");
         let sol = match try_solve(&mut solver, instance.clone(), max_cardinality, &point_map) {
@@ -70,7 +70,7 @@ enum SolveError {
 }
 
 fn try_solve(
-    solver: &mut Glucose,
+    solver: &mut (impl Solve + rustsat::solvers::SolveStats),
     instance: SatInstance<BasicVarManager>,
     max_cardinality: usize,
     point_map: &HashMap<Point, Var>,
