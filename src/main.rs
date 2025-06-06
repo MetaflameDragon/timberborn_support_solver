@@ -1,5 +1,6 @@
-use crate::point::Point;
+use crate::{dimensions::DimTy, point::Point};
 use anyhow::{Context, bail};
+use clap::{Arg, CommandFactory, FromArgMatches, Parser, arg, command};
 use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
@@ -10,20 +11,58 @@ use rustsat::{
     types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 use thiserror::Error;
 
 mod dimensions;
 mod grid;
 mod point;
 
+#[derive(Parser)]
+#[command()]
+struct Args {
+    width: DimTy,
+    height: DimTy,
+    start_count: usize,
+}
+
+fn parse_or_readline() -> anyhow::Result<Args> {
+    // Args were provided (try to parse, exit on fail)
+    if std::env::args_os().len() > 1 {
+        return Ok(Args::parse());
+    }
+
+    let mut cmd = Args::command().no_binary_name(true);
+
+    println!("No CLI arguments were provided");
+    println!("Specify arguments via stdin:");
+    println!("{}", cmd.render_usage());
+
+    std::io::stdout()
+        .flush()
+        .context("could not write to stdout")?;
+    let mut buffer = String::new();
+    std::io::stdin()
+        .read_line(&mut buffer)
+        .context("could not read stdin")?;
+
+    let args = shlex::split(buffer.trim()).context("invalid quoting")?;
+    let matches = cmd
+        .try_get_matches_from(args)
+        .context("failed to parse args")?;
+
+    Ok(Args::from_arg_matches(&matches).context("failed to parse args")?)
+}
+
 fn main() -> anyhow::Result<()> {
+    let args = parse_or_readline()?;
+
     let mut instance: SatInstance<BasicVarManager> = SatInstance::new();
-    let dims = Dimensions::new(17, 16);
+    let dims = Dimensions::new(args.width, args.height);
 
     let point_map = build_clauses(&mut instance, dims).context("failed to build clauses")?;
 
-    for max_cardinality in (1..=20).rev() {
+    for max_cardinality in (1..=args.start_count).rev() {
         let mut solver = GlucoseSimp::default();
 
         println!("Solving for n <= {max_cardinality}...");
