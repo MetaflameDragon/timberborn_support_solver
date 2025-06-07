@@ -51,6 +51,13 @@ impl<T> Grid<T> {
             index.div(self.dims.width as usize) as PointTy,
         )
     }
+
+    pub fn try_from_vec(dims: Dimensions, data: Vec<T>) -> Option<Self> {
+        if dims.width as usize * dims.height as usize != data.len() {
+            return None;
+        }
+        Some(Grid { data, dims })
+    }
 }
 
 impl<T: Default + Clone> Grid<T> {

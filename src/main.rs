@@ -11,7 +11,7 @@ use rustsat::{
     types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
-use std::{collections::HashMap, io::Write};
+use std::{collections::HashMap, io::Write, path::PathBuf};
 use thiserror::Error;
 
 mod dimensions;
@@ -28,6 +28,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Rect { width: DimTy, height: DimTy },
+    File { path: PathBuf },
 }
 
 fn parse_or_readline() -> anyhow::Result<Cli> {
@@ -65,6 +66,57 @@ fn main() -> anyhow::Result<()> {
 
     let terrain_grid: Grid<bool> = match args.cmd {
         Command::Rect { width, height } => Grid::new_fill(Dimensions::new(width, height), true),
+        Command::File { path } => {
+            println!(
+                "Opening file {}",
+                path.canonicalize()
+                    .context("failed to canonicalize path")?
+                    .as_os_str()
+                    .to_string_lossy()
+            );
+
+            let file_str = std::fs::read_to_string(path).context("Failed to read file")?;
+            // let allowed_chars: Vec<_> = "\r\n X".chars().collect();
+            // if let Some(c) = file_str.chars().find(|c| allowed_chars.contains(&c)) {
+            //     bail!(
+            //         "File contains disallowed characters
+            //          Found '{c}', expected ' ', 'X', or newline \\r\\n chars"
+            //     )
+            // }
+
+            let lines: Vec<_> = file_str.lines().collect();
+            if lines.is_empty() {
+                bail!("File is empty");
+            }
+
+            let dims = Dimensions::new(
+                lines.iter().map(|line| line.chars().count()).max().unwrap() as DimTy,
+                lines.len() as DimTy,
+            );
+
+            let grid_flat: Vec<bool> = lines
+                .iter()
+                .map(|line| -> anyhow::Result<Vec<bool>> {
+                    let mut line: Vec<_> = line
+                        .chars()
+                        .map(|c| match c {
+                            ' ' => Ok(false),
+                            'X' => Ok(true),
+                            c => {
+                                bail!("invalid character '{}' (expected 'X' or ' ')", c);
+                            }
+                        })
+                        .collect::<Result<_, _>>()?;
+                    line.resize(dims.width as usize, false);
+                    Ok(line)
+                })
+                .collect::<Result<Vec<Vec<bool>>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect();
+
+            Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")?
+        }
     };
 
     let point_map =
@@ -89,17 +141,39 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
-        let grid = Grid::from_map(terrain_grid.dims(), |p| {
+        let supports_grid = Grid::from_map(terrain_grid.dims(), |p| {
             sol.var_value(*point_map.get(&p).unwrap())
                 .to_bool_with_def(false)
         });
 
-        let marked_count = grid.iter().filter(|&&x| x).count();
+        let marked_count = supports_grid.iter().filter(|&&x| x).count();
         println!("Solution: ({marked_count} marked)");
 
-        print_grid(&grid, |b| {
-            b.then_some(block_char::FULL)
-                .unwrap_or(block_char::LIGHT_SHADE)
+        enum Tile {
+            Support,
+            Terrain,
+        }
+
+        assert_eq!(terrain_grid.dims(), supports_grid.dims());
+        let combined_grid: Grid<Option<Tile>> = Grid::from_map(terrain_grid.dims(), |p| {
+            match (
+                terrain_grid.get(p).copied().unwrap(),
+                supports_grid.get(p).copied().unwrap(),
+            ) {
+                (true, true) => Some(Tile::Support),
+                (true, false) => Some(Tile::Terrain),
+                (false, false) => None,
+                (false, true) => unreachable!(
+                    "A support was incorrectly placed without terrain above it (at {})",
+                    p
+                ),
+            }
+        });
+
+        print_grid(&combined_grid, |b| match b {
+            None => block_char::LIGHT_SHADE,
+            Some(Tile::Terrain) => block_char::MEDIUM_SHADE,
+            Some(Tile::Support) => block_char::FULL,
         });
     }
 
@@ -178,4 +252,5 @@ fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
 mod block_char {
     pub const FULL: char = '\u{2588}';
     pub const LIGHT_SHADE: char = '\u{2591}';
+    pub const MEDIUM_SHADE: char = '\u{2592}';
 }
