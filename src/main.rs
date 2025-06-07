@@ -66,57 +66,7 @@ fn main() -> anyhow::Result<()> {
 
     let terrain_grid: Grid<bool> = match args.cmd {
         Command::Rect { width, height } => Grid::new_fill(Dimensions::new(width, height), true),
-        Command::File { path } => {
-            println!(
-                "Opening file {}",
-                path.canonicalize()
-                    .context("failed to canonicalize path")?
-                    .as_os_str()
-                    .to_string_lossy()
-            );
-
-            let file_str = std::fs::read_to_string(path).context("Failed to read file")?;
-            // let allowed_chars: Vec<_> = "\r\n X".chars().collect();
-            // if let Some(c) = file_str.chars().find(|c| allowed_chars.contains(&c)) {
-            //     bail!(
-            //         "File contains disallowed characters
-            //          Found '{c}', expected ' ', 'X', or newline \\r\\n chars"
-            //     )
-            // }
-
-            let lines: Vec<_> = file_str.lines().collect();
-            if lines.is_empty() {
-                bail!("File is empty");
-            }
-
-            let dims = Dimensions::new(
-                lines.iter().map(|line| line.chars().count()).max().unwrap() as DimTy,
-                lines.len() as DimTy,
-            );
-
-            let grid_flat: Vec<bool> = lines
-                .iter()
-                .map(|line| -> anyhow::Result<Vec<bool>> {
-                    let mut line: Vec<_> = line
-                        .chars()
-                        .map(|c| match c {
-                            ' ' => Ok(false),
-                            'X' => Ok(true),
-                            c => {
-                                bail!("invalid character '{}' (expected 'X' or ' ')", c);
-                            }
-                        })
-                        .collect::<Result<_, _>>()?;
-                    line.resize(dims.width as usize, false);
-                    Ok(line)
-                })
-                .collect::<Result<Vec<Vec<bool>>, _>>()?
-                .into_iter()
-                .flatten()
-                .collect();
-
-            Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")?
-        }
+        Command::File { path } => load_grid_from_file(path)?,
     };
 
     let point_map =
@@ -178,6 +128,51 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {
+    println!(
+        "Opening file {}",
+        path.canonicalize()
+            .context("failed to canonicalize path")?
+            .as_os_str()
+            .to_string_lossy()
+    );
+
+    let file_str = std::fs::read_to_string(path).context("Failed to read file")?;
+
+    let lines: Vec<_> = file_str.lines().collect();
+    if lines.is_empty() {
+        bail!("File is empty");
+    }
+
+    let dims = Dimensions::new(
+        lines.iter().map(|line| line.chars().count()).max().unwrap() as DimTy,
+        lines.len() as DimTy,
+    );
+
+    let grid_flat: Vec<bool> = lines
+        .iter()
+        .map(|line| -> anyhow::Result<Vec<bool>> {
+            let mut line: Vec<_> = line
+                .chars()
+                .map(|c| match c {
+                    ' ' => Ok(false),
+                    'X' => Ok(true),
+                    c => {
+                        bail!("invalid character '{}' (expected 'X' or ' ')", c);
+                    }
+                })
+                .collect::<Result<_, _>>()?;
+            line.resize(dims.width as usize, false);
+            Ok(line)
+        })
+        .collect::<Result<Vec<Vec<bool>>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")
 }
 
 #[derive(Error, Debug)]
