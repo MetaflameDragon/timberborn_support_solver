@@ -1,6 +1,6 @@
 use crate::{dimensions::DimTy, point::Point};
 use anyhow::{Context, bail};
-use clap::{Arg, CommandFactory, FromArgMatches, Parser, arg, command};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
@@ -19,20 +19,24 @@ mod grid;
 mod point;
 
 #[derive(Parser)]
-#[command()]
-struct Args {
-    width: DimTy,
-    height: DimTy,
+struct Cli {
     start_count: usize,
+    #[command(subcommand)]
+    cmd: Command,
 }
 
-fn parse_or_readline() -> anyhow::Result<Args> {
+#[derive(Subcommand)]
+enum Command {
+    Rect { width: DimTy, height: DimTy },
+}
+
+fn parse_or_readline() -> anyhow::Result<Cli> {
     // Args were provided (try to parse, exit on fail)
     if std::env::args_os().len() > 1 {
-        return Ok(Args::parse());
+        return Ok(Cli::parse());
     }
 
-    let mut cmd = Args::command().no_binary_name(true);
+    let mut cmd = Cli::command().no_binary_name(true);
 
     println!("No CLI arguments were provided");
     println!("Specify arguments via stdin:");
@@ -51,16 +55,20 @@ fn parse_or_readline() -> anyhow::Result<Args> {
         .try_get_matches_from(args)
         .context("failed to parse args")?;
 
-    Ok(Args::from_arg_matches(&matches).context("failed to parse args")?)
+    Ok(Cli::from_arg_matches(&matches).context("failed to parse args")?)
 }
 
 fn main() -> anyhow::Result<()> {
     let args = parse_or_readline()?;
 
     let mut instance: SatInstance<BasicVarManager> = SatInstance::new();
-    let dims = Dimensions::new(args.width, args.height);
 
-    let point_map = build_clauses(&mut instance, dims).context("failed to build clauses")?;
+    let terrain_grid: Grid<bool> = match args.cmd {
+        Command::Rect { width, height } => Grid::new_fill(Dimensions::new(width, height), true),
+    };
+
+    let point_map =
+        build_clauses(&mut instance, &terrain_grid).context("failed to build clauses")?;
 
     for max_cardinality in (1..=args.start_count).rev() {
         let mut solver = GlucoseSimp::default();
@@ -81,7 +89,7 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
-        let grid = Grid::from_map(dims, |p| {
+        let grid = Grid::from_map(terrain_grid.dims(), |p| {
             sol.var_value(*point_map.get(&p).unwrap())
                 .to_bool_with_def(false)
         });
@@ -135,21 +143,24 @@ fn try_solve(
 
 fn build_clauses(
     instance: &mut SatInstance<BasicVarManager>,
-    dims: Dimensions,
+    terrain_grid: &Grid<bool>,
 ) -> Result<HashMap<Point, Var>, OutOfMemory> {
     let mut point_lit_map = HashMap::new();
 
     let var_manager = instance.var_manager_mut();
-    for p in dims.iter_within() {
+    for p in terrain_grid.dims().iter_within() {
         let var = var_manager.new_var();
         point_lit_map.insert(p, var);
     }
 
-    for point in dims.iter_within() {
+    for (point, val) in terrain_grid.enumerate() {
+        if !val {
+            continue;
+        }
         let clause: Clause = Clause::from_iter(
             point
                 .iter_within_manhattan(3)
-                .filter(|p| dims.contains(*p))
+                .filter(|p| terrain_grid.dims().contains(*p))
                 .map(|p| point_lit_map[&p].pos_lit()),
         );
         instance.add_clause(clause);
