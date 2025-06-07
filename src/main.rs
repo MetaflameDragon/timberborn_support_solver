@@ -217,6 +217,7 @@ fn build_clauses(
     let mut point_lit_map = HashMap::new();
 
     let var_manager = instance.var_manager_mut();
+    // Reserve vars for all points on the grid
     for p in terrain_grid.dims().iter_within() {
         let var = var_manager.new_var();
         point_lit_map.insert(p, var);
@@ -228,8 +229,8 @@ fn build_clauses(
         }
         let clause: Clause = Clause::from_iter(
             point
-                .iter_within_manhattan(3)
-                .filter(|p| terrain_grid.dims().contains(*p))
+                .adjacent_points(3, terrain_grid)
+                .into_iter()
                 .map(|p| point_lit_map[&p].pos_lit()),
         );
         instance.add_clause(clause);
