@@ -75,7 +75,14 @@ fn main() -> anyhow::Result<()> {
 
     if let Err(err) = ctrlc::set_handler({
         let interrupter = interrupter.clone();
+        let mut is_repeat = false;
         move || {
+            if is_repeat {
+                warn!("Aborting immediately");
+                std::process::exit(-1);
+            }
+
+            is_repeat = true;
             warn!("Stopping...");
             // TODO: handle stdin somehow?
             if let Some(int) = &*interrupter.lock().expect("Mutex was poisoned!") {
