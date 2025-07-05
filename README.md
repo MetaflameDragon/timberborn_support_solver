@@ -4,6 +4,12 @@ Timberborn's 3D terrain, which can be supported using platforms, is an essential
 
 This project uses a SAT solver to find optimal support layouts for terrain of a given shape. The program currently only uses basic 1x1 supports.
 
+# Requirements
+
+Besides everything that cargo already handles automatically, `rustsat-glucose` requires `bindgen`, which has [special installation requirements][bindgen-install]. If your build is failing, make sure that you have `libclang` (see link) and CMake installed.
+
+[bindgen-install]: https://rust-lang.github.io/rust-bindgen/requirements.html
+
 # Usage
 
 ```
