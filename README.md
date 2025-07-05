@@ -4,6 +4,14 @@ Timberborn's 3D terrain, which can be supported using platforms, is an essential
 
 This project uses a SAT solver to find optimal support layouts for terrain of a given shape. The program currently only uses basic 1x1 supports.
 
+# Requirements
+
+Besides everything that cargo already handles automatically, you'll need CMake installed.
+
+```shell
+cargo install cmake
+```
+
 # Usage
 
 ```
