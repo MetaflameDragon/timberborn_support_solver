@@ -1,16 +1,22 @@
 #![allow(dead_code)]
 
-use std::{collections::HashMap, io::Write, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, bail};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use dimensions::Dimensions;
 use grid::Grid;
+use log::{error, info, warn};
 use rustsat::{
     OutOfMemory,
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, ManageVars, SatInstance},
-    solvers::{Solve, SolverResult},
+    solvers::{Interrupt, InterruptSolver, Solve, SolverResult},
     types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
@@ -62,6 +68,23 @@ fn parse_or_readline() -> anyhow::Result<Cli> {
 }
 
 fn main() -> anyhow::Result<()> {
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+
+    let interrupter: Arc<Mutex<Option<Box<dyn InterruptSolver + Send>>>> =
+        Arc::new(Mutex::new(None));
+
+    if let Err(err) = ctrlc::set_handler({
+        let interrupter = interrupter.clone();
+        move || {
+            warn!("Stopping...");
+            // TODO: handle stdin somehow?
+            if let Some(int) = &*interrupter.lock().expect("Mutex was poisoned!") {
+                int.interrupt();
+            }
+        }
+    }) {
+        warn!("Failed to set interrupt handler! {}", err);
+    }
     let args = parse_or_readline()?;
 
     let mut instance: SatInstance<BasicVarManager> = SatInstance::new();
@@ -82,6 +105,7 @@ fn main() -> anyhow::Result<()> {
     // solution, and the solver doesn't step down by one each time unnecessarily.
     while max_cardinality > 0 {
         let mut solver = GlucoseSimp::default();
+        *interrupter.lock().expect("Mutex was poisoned!") = Some(Box::new(solver.interrupter()));
 
         println!("Solving for n <= {max_cardinality}...");
         let sol = match try_solve(&mut solver, instance.clone(), max_cardinality, &point_map) {
