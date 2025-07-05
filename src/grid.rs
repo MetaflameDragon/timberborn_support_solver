@@ -1,8 +1,9 @@
+use std::ops::Div;
+
 use crate::{
     dimensions::Dimensions,
     point::{Point, PointTy},
 };
-use std::ops::Div;
 
 pub struct Grid<T> {
     data: Vec<T>,
@@ -20,10 +21,7 @@ impl<T> Grid<T> {
     }
 
     pub fn from_map(dims: Dimensions, map_fn: impl Fn(Point) -> T) -> Self {
-        Grid {
-            data: dims.iter_within().map(&map_fn).collect(),
-            dims,
-        }
+        Grid { data: dims.iter_within().map(&map_fn).collect(), dims }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -31,10 +29,7 @@ impl<T> Grid<T> {
     }
 
     pub fn enumerate(&self) -> impl Iterator<Item = (Point, &T)> {
-        self.data
-            .iter()
-            .enumerate()
-            .map(|(i, val)| (self.index_to_point(i), val))
+        self.data.iter().enumerate().map(|(i, val)| (self.index_to_point(i), val))
     }
 
     pub fn get(&self, point: Point) -> Option<&T> {
@@ -69,14 +64,8 @@ impl<T: Default + Clone> Grid<T> {
 impl<T: Clone> Grid<T> {
     pub fn new_fill(dims: Dimensions, value: T) -> Self {
         let Some(flat_size) = dims.width.checked_mul(dims.height) else {
-            panic!(
-                "Dimensions too large! {}*{} would overflow",
-                dims.width, dims.height
-            );
+            panic!("Dimensions too large! {}*{} would overflow", dims.width, dims.height);
         };
-        Grid {
-            data: vec![value; flat_size as usize],
-            dims,
-        }
+        Grid { data: vec![value; flat_size as usize], dims }
     }
 }

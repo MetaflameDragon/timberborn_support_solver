@@ -1,4 +1,5 @@
-use crate::{dimensions::DimTy, point::Point};
+use std::{collections::HashMap, io::Write, path::PathBuf};
+
 use anyhow::{Context, bail};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use dimensions::Dimensions;
@@ -11,8 +12,9 @@ use rustsat::{
     types::{Assignment, Clause, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
-use std::{collections::HashMap, io::Write, path::PathBuf};
 use thiserror::Error;
+
+use crate::{dimensions::DimTy, point::Point};
 
 mod dimensions;
 mod grid;
@@ -43,18 +45,12 @@ fn parse_or_readline() -> anyhow::Result<Cli> {
     println!("Specify arguments via stdin:");
     println!("{}", cmd.render_usage());
 
-    std::io::stdout()
-        .flush()
-        .context("could not write to stdout")?;
+    std::io::stdout().flush().context("could not write to stdout")?;
     let mut buffer = String::new();
-    std::io::stdin()
-        .read_line(&mut buffer)
-        .context("could not read stdin")?;
+    std::io::stdin().read_line(&mut buffer).context("could not read stdin")?;
 
     let args = shlex::split(buffer.trim()).context("invalid quoting")?;
-    let matches = cmd
-        .try_get_matches_from(args)
-        .context("failed to parse args")?;
+    let matches = cmd.try_get_matches_from(args).context("failed to parse args")?;
 
     Ok(Cli::from_arg_matches(&matches).context("failed to parse args")?)
 }
@@ -92,8 +88,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         let supports_grid = Grid::from_map(terrain_grid.dims(), |p| {
-            sol.var_value(*point_map.get(&p).unwrap())
-                .to_bool_with_def(false)
+            sol.var_value(*point_map.get(&p).unwrap()).to_bool_with_def(false)
         });
 
         let marked_count = supports_grid.iter().filter(|&&x| x).count();
@@ -106,10 +101,7 @@ fn main() -> anyhow::Result<()> {
 
         assert_eq!(terrain_grid.dims(), supports_grid.dims());
         let combined_grid: Grid<Option<Tile>> = Grid::from_map(terrain_grid.dims(), |p| {
-            match (
-                terrain_grid.get(p).copied().unwrap(),
-                supports_grid.get(p).copied().unwrap(),
-            ) {
+            match (terrain_grid.get(p).copied().unwrap(), supports_grid.get(p).copied().unwrap()) {
                 (true, true) => Some(Tile::Support),
                 (true, false) => Some(Tile::Terrain),
                 (false, false) => None,
@@ -133,10 +125,7 @@ fn main() -> anyhow::Result<()> {
 fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {
     println!(
         "Opening file {}",
-        path.canonicalize()
-            .context("failed to canonicalize path")?
-            .as_os_str()
-            .to_string_lossy()
+        path.canonicalize().context("failed to canonicalize path")?.as_os_str().to_string_lossy()
     );
 
     let file_str = std::fs::read_to_string(path).context("Failed to read file")?;
@@ -202,9 +191,7 @@ fn try_solve(
         .context("failed to encode cardinality constraint")?;
 
     match solver.solve().context("error while solving")? {
-        SolverResult::Sat => Ok(solver
-            .full_solution()
-            .context("Failed to get full solution")?),
+        SolverResult::Sat => Ok(solver.full_solution().context("Failed to get full solution")?),
         SolverResult::Unsat => Err(SolveError::Unsat),
         SolverResult::Interrupted => Err(SolveError::Interrupted),
     }
@@ -228,10 +215,7 @@ fn build_clauses(
             continue;
         }
         let clause: Clause = Clause::from_iter(
-            point
-                .adjacent_points(3, terrain_grid)
-                .into_iter()
-                .map(|p| point_lit_map[&p].pos_lit()),
+            point.adjacent_points(3, terrain_grid).into_iter().map(|p| point_lit_map[&p].pos_lit()),
         );
         instance.add_clause(clause);
     }

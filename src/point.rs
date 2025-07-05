@@ -1,10 +1,12 @@
-use crate::grid::Grid;
-use rustsat::types::Lit;
 use std::{
     collections::{HashSet, VecDeque},
     fmt::{Display, Formatter},
     ops::{Add, Mul, Neg, Sub},
 };
+
+use rustsat::types::Lit;
+
+use crate::grid::Grid;
 // The math is a mess but whatever
 
 pub type PointTy = i16;
@@ -31,10 +33,7 @@ impl Point {
     }
 
     pub const fn abs(self) -> Self {
-        Point {
-            x: self.x.abs(),
-            y: self.y.abs(),
-        }
+        Point { x: self.x.abs(), y: self.y.abs() }
     }
 
     pub fn manhattan_to(self, other: Point) -> usize {
@@ -127,11 +126,7 @@ pub struct IterManhattan {
 
 impl IterManhattan {
     pub const fn new(center: Point, dist: usize) -> Self {
-        IterManhattan {
-            center,
-            dist,
-            iter_point_rel: Point::new(0, -(dist as PointTy)),
-        }
+        IterManhattan { center, dist, iter_point_rel: Point::new(0, -(dist as PointTy)) }
     }
 }
 
@@ -160,9 +155,10 @@ impl Iterator for IterManhattan {
 
 #[cfg(test)]
 mod tests {
+    use assertables::*;
+
     use super::*;
     use crate::dimensions::Dimensions;
-    use assertables::*;
 
     #[test]
     fn iter_manhattan() {
@@ -206,21 +202,10 @@ mod tests {
 
         assert_set_eq!(
             adjacent_points,
-            vec![
-                (0, 1),
-                (0, 2),
-                (1, 2),
-                (2, 1),
-                (2, 2),
-                (2, 3),
-                (3, 0),
-                (3, 1),
-                (3, 2),
-                (3, 3),
-            ]
-            .iter()
-            .map(|t| Point::new(t.0, t.1))
-            .collect::<Vec<_>>()
+            vec![(0, 1), (0, 2), (1, 2), (2, 1), (2, 2), (2, 3), (3, 0), (3, 1), (3, 2), (3, 3),]
+                .iter()
+                .map(|t| Point::new(t.0, t.1))
+                .collect::<Vec<_>>()
         );
     }
 }

@@ -36,10 +36,7 @@ pub struct DimensionsIter {
 
 impl DimensionsIter {
     pub const fn new(dims: Dimensions) -> Self {
-        DimensionsIter {
-            dims,
-            current: Point::new(0, 0),
-        }
+        DimensionsIter { dims, current: Point::new(0, 0) }
     }
 }
 
@@ -65,8 +62,9 @@ impl Iterator for DimensionsIter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use assertables::{assert_all, assert_len_eq_x};
+
+    use super::*;
 
     #[test]
     fn iter_dims() {
