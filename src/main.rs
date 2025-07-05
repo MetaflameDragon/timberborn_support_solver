@@ -74,7 +74,13 @@ fn main() -> anyhow::Result<()> {
     let point_map =
         build_clauses(&mut instance, &terrain_grid).context("failed to build clauses")?;
 
-    for max_cardinality in (1..=args.start_count).rev() {
+    let mut max_cardinality = args.start_count;
+
+    // Rather than a reverse for loop, this repeatedly looks for a solution with a
+    // cardinality 1 lesser than each previous one. This means that, if there's a
+    // high initial estimate, the SAT solver is likely to find a much more efficient
+    // solution, and the solver doesn't step down by one each time unnecessarily.
+    while max_cardinality > 0 {
         let mut solver = GlucoseSimp::default();
 
         println!("Solving for n <= {max_cardinality}...");
@@ -99,6 +105,8 @@ fn main() -> anyhow::Result<()> {
 
         let marked_count = supports_grid.iter().filter(|&&x| x).count();
         println!("Solution: ({marked_count} marked)");
+
+        max_cardinality = marked_count - 1;
 
         enum Tile {
             Support,
