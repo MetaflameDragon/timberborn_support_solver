@@ -24,6 +24,7 @@ mod point;
 
 #[derive(Parser)]
 struct Cli {
+    /// Initial support platform count to aim for (a high estimate).
     start_count: usize,
     #[command(subcommand)]
     cmd: Command,
@@ -31,7 +32,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Calculates a solution for a filled rectangular area.
     Rect { width: DimTy, height: DimTy },
+    /// Takes a file as the ceiling layout - each line is a row,
+    /// 'X' marks ceiling blocks, '.' or ' ' marks empty space.
     File { path: PathBuf },
 }
 
@@ -45,7 +49,7 @@ fn parse_or_readline() -> anyhow::Result<Cli> {
 
     println!("No CLI arguments were provided");
     println!("Specify arguments via stdin:");
-    println!("{}", cmd.render_usage());
+    println!("{}", cmd.render_long_help());
 
     std::io::stdout().flush().context("could not write to stdout")?;
     let mut buffer = String::new();
