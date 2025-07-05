@@ -168,7 +168,7 @@ mod tests {
         assert_len_eq_x!(manhattan_points, 1 + 3 + 5 + 7 + 5 + 3 + 1);
         let order_predicate = |a: Point, b: Point| a.y < b.y || a.y == b.y && a.x < b.x;
         assert_all!(manhattan_points.windows(2), |pair: &[Point]| {
-            order_predicate(*&pair[0], *&pair[1])
+            order_predicate(pair[0], pair[1])
         });
     }
 
@@ -202,7 +202,7 @@ mod tests {
 
         assert_set_eq!(
             adjacent_points,
-            vec![(0, 1), (0, 2), (1, 2), (2, 1), (2, 2), (2, 3), (3, 0), (3, 1), (3, 2), (3, 3),]
+            [(0, 1), (0, 2), (1, 2), (2, 1), (2, 2), (2, 3), (3, 0), (3, 1), (3, 2), (3, 3)]
                 .iter()
                 .map(|t| Point::new(t.0, t.1))
                 .collect::<Vec<_>>()

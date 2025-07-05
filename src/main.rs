@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io::Write, path::PathBuf};
 
 use anyhow::{Context, bail};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use dimensions::Dimensions;
 use grid::Grid;
 use rustsat::{
@@ -52,7 +52,7 @@ fn parse_or_readline() -> anyhow::Result<Cli> {
     let args = shlex::split(buffer.trim()).context("invalid quoting")?;
     let matches = cmd.try_get_matches_from(args).context("failed to parse args")?;
 
-    Ok(Cli::from_arg_matches(&matches).context("failed to parse args")?)
+    Cli::from_arg_matches(&matches).context("failed to parse args")
 }
 
 fn main() -> anyhow::Result<()> {
