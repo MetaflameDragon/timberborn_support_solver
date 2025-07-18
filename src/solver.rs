@@ -1,4 +1,4 @@
-use std::{array, collections::HashMap, fs::File, io::Write, iter::once};
+use std::{array, collections::HashMap, env::Vars, fs::File, io::Write, iter::once};
 
 use anyhow::{Context, bail, ensure};
 use assertables::{assert_gt, assert_le};
@@ -13,7 +13,7 @@ use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 
 use crate::{
-    Command, InterrupterContainer, TERRAIN_SUPPORT_DISTANCE,
+    Command, InterrupterContainer,
     dimensions::Dimensions,
     grid::Grid,
     load_grid_from_file,
@@ -21,6 +21,8 @@ use crate::{
     point::Point,
     world::World,
 };
+
+const TERRAIN_SUPPORT_DISTANCE: usize = 3;
 
 pub struct Solver<'a> {
     vars: Variables,
@@ -202,6 +204,14 @@ impl Solver<'_> {
         Solver { vars, instance, world }
     }
 
+    pub fn vars(&self) -> &Variables {
+        &self.vars
+    }
+
+    pub fn instance(&self) -> &SatInstance {
+        &self.instance
+    }
+
     pub fn solve(
         &mut self,
         interrupter: InterrupterContainer,
@@ -219,8 +229,8 @@ impl Solver<'_> {
         );
 
         let assignment = match try_solve(&mut sat_solver, self.instance.clone(), upper_constraint) {
-            Ok(sol) => sol,
-            Err(SolveError::Unsat) => {
+            Ok(Some(assignment)) => assignment,
+            Ok(None) => {
                 info!(target: "solver", "Unsat");
                 return Ok(None);
             }
@@ -283,6 +293,10 @@ impl Solution<'_> {
         }
 
         Solution { platforms, world }
+    }
+
+    pub fn platforms(&self) -> &HashMap<Point, PlatformType> {
+        &self.platforms
     }
 
     pub fn platform_count(&self) -> usize {
@@ -373,8 +387,6 @@ impl Variables {
 
 #[derive(Error, Debug)]
 pub enum SolveError {
-    #[error("unsatisfiable")]
-    Unsat,
     #[error("interrupted")]
     Interrupted,
     #[error(transparent)]
@@ -385,7 +397,7 @@ fn try_solve(
     solver: &mut (impl Solve + rustsat::solvers::SolveStats),
     instance: SatInstance<BasicVarManager>,
     card_constraint: CardConstraint,
-) -> Result<Assignment, SolveError> {
+) -> Result<Option<Assignment>, SolveError> {
     let (cnf, mut var_manager) = instance.into_cnf();
 
     solver.add_cnf(cnf).context("Failed to add clause")?;
@@ -394,8 +406,10 @@ fn try_solve(
         .context("failed to encode cardinality constraint")?;
 
     match solver.solve().context("error while solving")? {
-        SolverResult::Sat => Ok(solver.full_solution().context("Failed to get full solution")?),
-        SolverResult::Unsat => Err(SolveError::Unsat),
+        SolverResult::Sat => {
+            Ok(Some(solver.full_solution().context("Failed to get full solution")?))
+        }
+        SolverResult::Unsat => Ok(None),
         SolverResult::Interrupted => Err(SolveError::Interrupted),
     }
 }

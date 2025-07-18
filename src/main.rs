@@ -12,33 +12,34 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use assertables::{assert_gt, assert_le};
-use clap::{builder::TypedValueParser, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, builder::TypedValueParser};
 use dimensions::Dimensions;
 use grid::Grid;
 use log::{error, info, warn};
 use rustsat::{
+    OutOfMemory,
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, ManageVars, ObjectVarManager, SatInstance},
     solvers::{Interrupt, InterruptSolver, Solve, SolverResult},
-    types::{constraints::CardConstraint, Assignment, Clause, Lit, Var},
-    OutOfMemory,
+    types::{Assignment, Clause, Lit, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 use world::World;
+
 use crate::{
     dimensions::DimTy,
     point::Point,
-    solver::Solver,
+    solver::{Solution, SolveError, Solver},
 };
 
 mod dimensions;
 mod grid;
+mod platform;
 mod point;
 mod solver;
-mod platform;
 mod world;
 
 #[derive(Parser)]
@@ -117,20 +118,19 @@ fn main() -> anyhow::Result<()> {
 
     let world = World::new(terrain_grid);
 
-    let solver = Solver::new(&world);
+    let mut solver = Solver::new(&world);
 
-    // TODO
-    // {
-    //     let path = format!("{run_timestamp}_vars.log");
-    //     info!("Writing variable map to {path}");
-    //     let mut file = File::create_new(&path)?;
-    //     vars.write_var_map(&mut file)?;
-    //
-    //     let path = format!("{run_timestamp}_dimacs.log");
-    //     info!("Writing DIMACS to {path}");
-    //     let mut file = File::create(&path)?;
-    //     instance.write_dimacs(&mut file)?
-    // }
+    {
+        let path = format!("{run_timestamp}_vars.log");
+        info!("Writing variable map to {path}");
+        let mut file = File::create_new(&path)?;
+        solver.vars().write_var_map(&mut file)?;
+
+        let path = format!("{run_timestamp}_dimacs.log");
+        info!("Writing DIMACS to {path}");
+        let mut file = File::create(&path)?;
+        solver.instance().write_dimacs(&mut file)?
+    }
 
     let mut max_cardinality = args.start_count;
 
@@ -140,60 +140,46 @@ fn main() -> anyhow::Result<()> {
     // solution, and the solver doesn't step down by one each time unnecessarily.
     let mut run_i = 0;
     while max_cardinality > 0 {
-        let mut solver = GlucoseSimp::default();
-        *interrupter.lock().expect("Mutex was poisoned!") = Some(Box::new(solver.interrupter()));
+        info!("Solving for n <= {max_cardinality}...");
+        let sol = match solver.solve(interrupter.clone(), max_cardinality) {
+            Ok(Some(sol)) => sol,
+            Ok(None) => {
+                info!("No solution found for n <= {max_cardinality} (UNSAT)");
+                break;
+            }
+            Err(SolveError::Interrupted) => {
+                println!("Interrupted!");
+                break;
+            }
+            Err(SolveError::Other(err)) => {
+                bail!(err);
+            }
+        };
 
-        println!("Solving for n <= {max_cardinality}...");
+        println!("Solution: ({} platforms)", sol.platform_count());
 
-        // Note: since the above is essentially a whole bunch of Horn clauses,
-        // platforms are selected by the _negative_ literal
+        assert_gt!(
+            sol.platform_count(),
+            0,
+            "A solution should not have 0
+        platforms!"
+        );
+        assert_le!(
+            sol.platform_count(),
+            max_cardinality,
+            "The solution had more marked platforms than expected!"
+        );
 
-        // let upper_constraint = CardConstraint::new_ub(
-        //     vars.platforms_1x1.values().map(|var| var.pos_lit()),
-        //     max_cardinality,
-        // );
+        max_cardinality = sol.platform_count() - 1;
+        run_i += 1;
+        println!("{:#?}", sol.platforms());
 
-        // let assignment =
-        //     match crate::solver::try_solve(&mut solver, instance.clone(),
-        // upper_constraint) {         Ok(sol) => sol,
-        //         Err(crate::solver::SolveError::Unsat) => {
-        //             println!("Unsat");
-        //             break;
-        //         }
-        //         Err(crate::solver::SolveError::Interrupted) => {
-        //             println!("Interrupted!");
-        //             break;
-        //         }
-        //         Err(crate::solver::SolveError::Other(err)) => {
-        //             bail!(err)
-        //         }
-        //     };
-        //
-        // let mut sol: crate::solver::Solution = Default::default();
-        //
-        // for (&p, &var) in &vars.platforms_1x1 {
-        //     if assignment.var_value(var).to_bool_with_def(false) {
-        //         sol.platforms.insert(p,
-        // crate::solver::PlatformType::Square1x1);     }
-        // }
-        // for (&p, &var) in &vars.platforms_3x3 {
-        //     if assignment.var_value(var).to_bool_with_def(false) {
-        //         sol.platforms.insert(p,
-        // crate::solver::PlatformType::Square3x3);     }
-        // }
-        // for (&p, &var) in &vars.platforms_5x5 {
-        //     if assignment.var_value(var).to_bool_with_def(false) {
-        //         sol.platforms.insert(p,
-        // crate::solver::PlatformType::Square5x5);     }
-        // }
-        //
-        // let marked_count = sol.platforms.iter().count();
-        // println!("Solution: ({marked_count} marked)");
-        //
+        // TODO?
         // {
         //     let path =
-        // format!("{run_timestamp}_assignment_{run_i}_ub_{max_cardinality}.log"
-        // );     info!("Writing assignment to {path}");
+        //         format!("
+        // {run_timestamp}_assignment_{run_i}_ub_{max_cardinality}.log"
+        //         );     info!("Writing assignment to {path}");
         //     let mut file = File::create_new(&path)?;
         //
         //     for lit in assignment.iter() {
@@ -205,18 +191,6 @@ fn main() -> anyhow::Result<()> {
         //         )?;
         //     }
         // }
-        //
-        // assert_gt!(marked_count, 0, "A solution should not have 0
-        // platforms!"); assert_le!(
-        //     marked_count,
-        //     max_cardinality,
-        //     "The solution had more marked platforms than expected!"
-        // );
-        //
-        // max_cardinality = marked_count - 1;
-        // run_i += 1;
-        //
-        // println!("{sol:#?}");
 
         //
         // enum Tile {
@@ -289,8 +263,6 @@ fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {
 
     Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")
 }
-
-const TERRAIN_SUPPORT_DISTANCE: usize = 3;
 
 fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
     for row in grid.iter_rows() {
