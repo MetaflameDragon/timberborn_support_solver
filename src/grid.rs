@@ -34,11 +34,23 @@ impl<T> Grid<T> {
     }
 
     pub fn get(&self, point: Point) -> Option<&T> {
-        if !self.dims.contains(point) {
-            return None;
-        }
-        let i = point.x as usize + (point.y as usize * self.dims.width as usize);
-        Some(&self.data[i])
+        self.data_index(point).map(|i| &self.data[i])
+    }
+
+    pub fn get_mut(&mut self, point: Point) -> Option<&mut T> {
+        self.data_index(point).map(|i| &mut self.data[i])
+    }
+
+    pub fn set(&mut self, point: Point, mut item: T) -> Option<T> {
+        let i = self.data_index(point)?;
+        std::mem::swap(&mut self.data[i], &mut item);
+        Some(item)
+    }
+
+    fn data_index(&self, point: Point) -> Option<usize> {
+        self.dims
+            .contains(point)
+            .then_some(point.x as usize + (point.y as usize * self.dims.width as usize))
     }
 
     fn index_to_point(&self, index: usize) -> Point {

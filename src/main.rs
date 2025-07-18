@@ -19,6 +19,8 @@ use world::World;
 
 use crate::{
     dimensions::DimTy,
+    platform::{Platform, PlatformType},
+    point::Point,
     solver::{SolutionData, SolveError, Solver},
 };
 
@@ -165,6 +167,8 @@ fn main() -> anyhow::Result<()> {
             );
             println!("{:#?}", solution.platforms());
 
+            print_solution(&world, &solution);
+
             ControlFlow::Continue(SolverResult { solution })
 
             // TODO?
@@ -251,6 +255,43 @@ where
         };
 
         iteration += 1;
+    }
+}
+
+fn print_solution(world: &World, solution_data: &SolutionData) {
+    let terrain_grid = world.terrain_grid();
+    let dims = terrain_grid.dims();
+
+    let mut char_grid = Grid::new_fill(dims, ' ');
+
+    for p in terrain_grid.enumerate().filter_map(|(p, val)| val.then_some(p)) {
+        char_grid.set(p, block_char::MEDIUM_SHADE).unwrap();
+    }
+
+    for (point, platform) in solution_data.platforms() {
+        let platform = Platform::new(*point, *platform);
+        let (lower, upper) = platform.area_corners();
+
+        let fill = match platform.platform_type() {
+            PlatformType::Square1x1 => '1',
+            PlatformType::Square3x3 => '3',
+            PlatformType::Square5x5 => '5',
+        };
+
+        for y in lower.y..=upper.y {
+            for x in lower.x..=upper.x {
+                let q = Point::new(x, y);
+                // Pass if out of bounds
+                _ = char_grid.set(q, fill);
+            }
+        }
+    }
+
+    for row in char_grid.iter_rows() {
+        for c in row {
+            print!("{}  ", c);
+        }
+        println!();
     }
 }
 

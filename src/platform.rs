@@ -52,6 +52,10 @@ impl Platform {
             && other_near.x <= self_far.x
             && other_near.y <= self_far.y
     }
+
+    pub fn platform_type(&self) -> PlatformType {
+        self.r#type
+    }
 }
 
 macro_rules! platform {
