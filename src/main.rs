@@ -6,14 +6,15 @@ use std::{
     fs::File,
     io::Write,
     iter,
+    iter::once,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
 use anyhow::{Context, bail};
-use assertables::assert_gt;
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use assertables::{assert_gt, assert_le};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, builder::TypedValueParser};
 use dimensions::Dimensions;
 use grid::Grid;
 use log::{error, info, warn};
@@ -126,7 +127,6 @@ fn main() -> anyhow::Result<()> {
         // i.e. if you can't place a smaller platform, you can't place a larger one
         // either
         instance.add_lit_impl_lit(var_5.pos_lit(), var_3.pos_lit());
-
         instance.add_lit_impl_lit(var_3.pos_lit(), var_1.pos_lit());
     }
 
@@ -235,69 +235,59 @@ fn main() -> anyhow::Result<()> {
         for lower_i in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
             let upper_i = lower_i + 1;
 
-            // Support the tile directly above
-            let lower_var = layers[lower_i];
-            let upper_var = layers[upper_i];
-            instance.add_lit_impl_lit(lower_var.pos_lit(), upper_var.pos_lit());
+            // Upper tile -> disjunction of tiles below (direct & neighbors)
+            // Equiv: conjunction of ~tiles below -> ~upper tile
 
-            // Support all neighbors
-            for q in p.neighbors() {
-                if let Some(neighbor_column) = vars.terrain_layers.get(&q) {
-                    let upper_var = neighbor_column[upper_i];
-                    instance.add_lit_impl_lit(lower_var.pos_lit(), upper_var.pos_lit());
-                }
-            }
+            let upper_tile = layers[upper_i].pos_lit();
+            let lower_tiles = p
+                .neighbors()
+                .iter()
+                .chain(once(p))
+                .filter_map(|q| vars.terrain_layers.get(q))
+                .map(|col| col[lower_i].pos_lit())
+                .collect::<Vec<_>>();
+
+            instance.add_lit_impl_clause(upper_tile, &lower_tiles);
         }
 
         // Require the topmost layer
         instance.add_unit(layers.last().unwrap().pos_lit());
-    }
 
-    // 1x1 supports for terrain
-    for (p, platform_var) in &vars.platforms_1x1 {
-        if let Some(tile_vars) = vars.terrain_layers.get(p) {
-            let tile_var = tile_vars.first().unwrap();
-            instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
-        }
-    }
+        // Lowest tile -> disjunction of all platforms below
+        let mut platforms: Vec<Var> = Vec::new();
 
-    // 3x3 supports for terrain
-    for (p, platform_var) in &vars.platforms_3x3 {
-        for x in p.x..=(p.x + 2) {
-            for y in p.y..=(p.y + 2) {
+        platforms.extend(vars.platforms_1x1.get(&p));
+        for x in (p.x - 2)..=p.x {
+            for y in (p.y - 2)..=p.y {
                 let q = Point::new(x, y);
-                if let Some(tile_vars) = vars.terrain_layers.get(&q) {
-                    let tile_var = tile_vars.first().unwrap();
-                    instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
-                }
+                platforms.extend(vars.platforms_3x3.get(&q));
             }
         }
-    }
-
-    // 5x5 supports for terrain
-    for (p, platform_var) in &vars.platforms_5x5 {
-        for x in p.x..=(p.x + 4) {
-            for y in p.y..=(p.y + 4) {
+        for x in (p.x - 4)..=p.x {
+            for y in (p.y - 4)..=p.y {
                 let q = Point::new(x, y);
-                if let Some(tile_vars) = vars.terrain_layers.get(&q) {
-                    let tile_var = tile_vars.first().unwrap();
-                    instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
-                }
+                platforms.extend(vars.platforms_5x5.get(&q));
             }
         }
+
+        instance.add_lit_impl_clause(
+            layers.first().unwrap().pos_lit(),
+            &platforms.iter().map(|v| v.pos_lit()).collect::<Vec<_>>(),
+        );
     }
 
     instance.convert_to_cnf();
+    let var_repr_map = vars.to_var_repr_map();
 
     {
         let path = format!("{run_timestamp}_vars.log");
-        let mut file = File::create_new(&path)?;
         info!("Writing variable map to {path}");
+        let mut file = File::create_new(&path)?;
         vars.write_var_map(&mut file)?;
 
         let path = format!("{run_timestamp}_dimacs.log");
-        let mut file = File::create(&path)?;
         info!("Writing DIMACS to {path}");
+        let mut file = File::create(&path)?;
         instance.write_dimacs(&mut file)?
     }
 
@@ -307,11 +297,15 @@ fn main() -> anyhow::Result<()> {
     // cardinality 1 lesser than each previous one. This means that, if there's a
     // high initial estimate, the SAT solver is likely to find a much more efficient
     // solution, and the solver doesn't step down by one each time unnecessarily.
+    let mut run_i = 0;
     while max_cardinality > 0 {
         let mut solver = GlucoseSimp::default();
         *interrupter.lock().expect("Mutex was poisoned!") = Some(Box::new(solver.interrupter()));
 
         println!("Solving for n <= {max_cardinality}...");
+
+        // Note: since the above is essentially a whole bunch of Horn clauses,
+        // platforms are selected by the _negative_ literal
 
         let upper_constraint = CardConstraint::new_ub(
             vars.platforms_1x1.values().map(|var| var.pos_lit()),
@@ -332,16 +326,6 @@ fn main() -> anyhow::Result<()> {
                 bail!(err)
             }
         };
-
-        {
-            let path = format!("{run_timestamp}_assignment_ub_{max_cardinality}.log");
-            let mut file = File::create_new(&path)?;
-            info!("Writing assignment to {path}");
-
-            for lit in assignment.iter() {
-                writeln!(&mut file, "{}", lit)?;
-            }
-        }
 
         let mut sol: Solution = Default::default();
 
@@ -367,9 +351,31 @@ fn main() -> anyhow::Result<()> {
 
         let marked_count = sol.platforms.iter().count();
         println!("Solution: ({marked_count} marked)");
+
+        {
+            let path = format!("{run_timestamp}_assignment_{run_i}_ub_{max_cardinality}.log");
+            info!("Writing assignment to {path}");
+            let mut file = File::create_new(&path)?;
+
+            for lit in assignment.iter() {
+                writeln!(
+                    &mut file,
+                    "{} | {}",
+                    lit,
+                    var_repr_map.get(&lit.var()).unwrap_or(&"?".to_owned())
+                )?;
+            }
+        }
+
         assert_gt!(marked_count, 0, "A solution should not have 0 platforms!");
+        assert_le!(
+            marked_count,
+            max_cardinality,
+            "The solution had more marked platforms than expected!"
+        );
 
         max_cardinality = marked_count - 1;
+        run_i += 1;
 
         println!("{sol:#?}");
 
@@ -469,23 +475,33 @@ struct Variables {
 
 impl Variables {
     pub fn write_var_map<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        for (var, repr) in self.to_var_repr_map() {
+            writeln!(w, "{var} {repr}")?;
+        }
+
+        Ok(())
+    }
+
+    pub fn to_var_repr_map(&self) -> HashMap<Var, String> {
+        let mut map = HashMap::new();
+
         for (prefix, hashmap) in
             [("P1", &self.platforms_1x1), ("P3", &self.platforms_3x3), ("P5", &self.platforms_5x5)]
         {
-            for (point, var) in hashmap {
+            for (point, &var) in hashmap {
                 let Point { x, y } = point;
-                writeln!(w, "{var} {prefix}({x},{y})")?;
+                map.insert(var, format!("{prefix}({x},{y})"));
             }
         }
 
         for (point, layers) in &self.terrain_layers {
-            for (i, var) in layers.iter().enumerate() {
+            for (i, &var) in layers.iter().enumerate() {
                 let Point { x, y } = point;
-                writeln!(w, "{var} T{i}({x},{y})")?;
+                map.insert(var, format!("T{i}({x},{y})"));
             }
         }
 
-        Ok(())
+        map
     }
 }
 
