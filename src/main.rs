@@ -212,11 +212,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    //
-    // let point_map =
-    //     build_clauses(&mut instance, &terrain_grid).context("failed to build
-    // clauses")?;
-
     // Terrain support goal clauses
     // Terrain support distance is handled in "layers", like variables stacked on
     // top of one another
@@ -344,10 +339,6 @@ fn main() -> anyhow::Result<()> {
                 sol.platforms.insert(p, PlatformType::Square5x5);
             }
         }
-
-        // let supports_grid = Grid::from_map(terrain_grid.dims(), |p| {
-        //     sol.var_value(*point_map.get(&p).unwrap()).to_bool_with_def(false)
-        // });
 
         let marked_count = sol.platforms.iter().count();
         println!("Solution: ({marked_count} marked)");
@@ -532,31 +523,6 @@ fn try_solve(
         SolverResult::Unsat => Err(SolveError::Unsat),
         SolverResult::Interrupted => Err(SolveError::Interrupted),
     }
-}
-
-fn build_clauses(
-    instance: &mut SatInstance<BasicVarManager>,
-    terrain_grid: &Grid<bool>,
-) -> Result<HashMap<Point, Var>, OutOfMemory> {
-    let mut point_lit_map = HashMap::new();
-
-    let var_manager = instance.var_manager_mut();
-    // Reserve vars for all points on the grid
-    for p in terrain_grid.dims().iter_within() {
-        let var = var_manager.new_var();
-        point_lit_map.insert(p, var);
-    }
-
-    for (point, val) in terrain_grid.enumerate() {
-        if !val {
-            continue;
-        }
-        let clause: Clause = Clause::from_iter(
-            point.adjacent_points(3, terrain_grid).into_iter().map(|p| point_lit_map[&p].pos_lit()),
-        );
-        instance.add_clause(clause);
-    }
-    Ok(point_lit_map)
 }
 
 fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
