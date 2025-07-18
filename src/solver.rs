@@ -18,7 +18,7 @@ use crate::{
     world::World,
 };
 
-const TERRAIN_SUPPORT_DISTANCE: usize = 3;
+const TERRAIN_SUPPORT_DISTANCE: usize = 4;
 
 pub struct Solver<'a> {
     vars: Variables,
