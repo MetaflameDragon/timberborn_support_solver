@@ -134,7 +134,7 @@ fn main() -> anyhow::Result<()> {
                 break;
             }
             Err(SolveError::Interrupted) => {
-                println!("Interrupted!");
+                warn!("Interrupted!");
                 break;
             }
             Err(SolveError::Other(err)) => {
@@ -142,7 +142,7 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
-        println!("Solution: ({} platforms)", sol.platform_count());
+        info!("Solution: ({} platforms)", sol.platform_count());
 
         assert_gt!(
             sol.platform_count(),
