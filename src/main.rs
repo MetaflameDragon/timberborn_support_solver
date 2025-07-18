@@ -3,6 +3,7 @@
 use std::{
     fs::File,
     io::Write,
+    ops::ControlFlow,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -18,7 +19,7 @@ use world::World;
 
 use crate::{
     dimensions::DimTy,
-    solver::{SolveError, Solver},
+    solver::{Solution, SolutionData, SolveError, Solver},
 };
 
 mod dimensions;
@@ -118,94 +119,139 @@ fn main() -> anyhow::Result<()> {
         solver.instance().write_dimacs(&mut file)?
     }
 
-    let mut max_cardinality = args.start_count;
-
     // Rather than a reverse for loop, this repeatedly looks for a solution with a
     // cardinality 1 lesser than each previous one. This means that, if there's a
     // high initial estimate, the SAT solver is likely to find a much more efficient
     // solution, and the solver doesn't step down by one each time unnecessarily.
-    let mut run_i = 0;
-    while max_cardinality > 0 {
-        info!("Solving for n <= {max_cardinality}...");
-        let sol = match solver.solve(interrupter.clone(), max_cardinality) {
-            Ok(Some(sol)) => sol,
-            Ok(None) => {
-                info!("No solution found for n <= {max_cardinality} (UNSAT)");
-                break;
-            }
-            Err(SolveError::Interrupted) => {
-                warn!("Interrupted!");
-                break;
-            }
-            Err(SolveError::Other(err)) => {
-                bail!(err);
-            }
-        };
 
-        info!("Solution: ({} platforms)", sol.platform_count());
-
-        assert_gt!(
-            sol.platform_count(),
-            0,
-            "A solution should not have 0
-        platforms!"
-        );
-        assert_le!(
-            sol.platform_count(),
-            max_cardinality,
-            "The solution had more marked platforms than expected!"
-        );
-
-        max_cardinality = sol.platform_count() - 1;
-        run_i += 1;
-        println!("{:#?}", sol.platforms());
-
-        // TODO?
-        // {
-        //     let path =
-        //         format!("
-        // {run_timestamp}_assignment_{run_i}_ub_{max_cardinality}.log"
-        //         );     info!("Writing assignment to {path}");
-        //     let mut file = File::create_new(&path)?;
-        //
-        //     for lit in assignment.iter() {
-        //         writeln!(
-        //             &mut file,
-        //             "{} | {}",
-        //             lit,
-        //             var_repr_map.get(&lit.var()).unwrap_or(&"?".to_owned())
-        //         )?;
-        //     }
-        // }
-
-        //
-        // enum Tile {
-        //     Support,
-        //     Terrain,
-        // }
-        //
-        // assert_eq!(terrain_grid.dims(), supports_grid.dims());
-        // let combined_grid: Grid<Option<Tile>> =
-        // Grid::from_map(terrain_grid.dims(), |p| {
-        //     match (terrain_grid.get(p).copied().unwrap(),
-        // supports_grid.get(p).copied().unwrap()) {         (true,
-        // true) => Some(Tile::Support),         (true, false) =>
-        // Some(Tile::Terrain),         (false, false) => None,
-        //         (false, true) => unreachable!(
-        //             "A support was incorrectly placed without terrain
-        // above it (at {})",             p
-        //         ),
-        //     }
-        // });
-        //
-        // print_grid(&combined_grid, |b| match b {
-        //     None => block_char::LIGHT_SHADE,
-        //     Some(Tile::Terrain) => block_char::MEDIUM_SHADE,
-        //     Some(Tile::Support) => block_char::FULL,
-        // });
+    struct SolverParams {
+        max_cardinality: usize,
+    }
+    struct SolverResult {
+        solution: SolutionData, // TODO: try to make this a Solution tied to the World by lifetime
     }
 
+    loop_with_feedback(
+        SolverParams { max_cardinality: args.start_count },
+        |_, result: SolverResult| {
+            ControlFlow::Continue(SolverParams {
+                max_cardinality: result.solution.platform_count() - 1,
+            })
+        },
+        |_i, SolverParams { max_cardinality }| {
+            info!("Solving for n <= {max_cardinality}...");
+            let solution = match (&mut solver).solve(interrupter.clone(), max_cardinality) {
+                Ok(Some(sol)) => sol,
+                Ok(None) => {
+                    info!("No solution found for n <= {max_cardinality} (UNSAT)");
+                    return ControlFlow::Break(Ok(()));
+                }
+                Err(SolveError::Interrupted) => {
+                    warn!("Interrupted!");
+                    return ControlFlow::Break(Ok(()));
+                }
+                Err(SolveError::Other(err)) => {
+                    return ControlFlow::Break(Err(err));
+                }
+            };
+
+            info!("Solution: ({} platforms)", solution.platform_count());
+
+            assert_gt!(solution.platform_count(), 0, "A solution should not have 0 platforms!");
+            assert_le!(
+                solution.platform_count(),
+                max_cardinality,
+                "The solution had more marked platforms than expected!"
+            );
+            println!("{:#?}", solution.platforms());
+
+            ControlFlow::Continue(SolverResult { solution })
+
+            // TODO?
+            // {
+            //     let path =
+            //         format!("
+            // {run_timestamp}_assignment_{run_i}_ub_{max_cardinality}.log"
+            //         );     info!("Writing assignment to {path}");
+            //     let mut file = File::create_new(&path)?;
+            //
+            //     for lit in assignment.iter() {
+            //         writeln!(
+            //             &mut file,
+            //             "{} | {}",
+            //             lit,
+            //
+            // var_repr_map.get(&lit.var()).unwrap_or(&"?".to_owned())
+            //         )?;
+            //     }
+            // }
+
+            //
+            // enum Tile {
+            //     Support,
+            //     Terrain,
+            // }
+            //
+            // assert_eq!(terrain_grid.dims(), supports_grid.dims());
+            // let combined_grid: Grid<Option<Tile>> =
+            // Grid::from_map(terrain_grid.dims(), |p| {
+            //     match (terrain_grid.get(p).copied().unwrap(),
+            // supports_grid.get(p).copied().unwrap()) {         (true,
+            // true) => Some(Tile::Support),         (true, false) =>
+            // Some(Tile::Terrain),         (false, false) => None,
+            //         (false, true) => unreachable!(
+            //             "A support was incorrectly placed without terrain
+            // above it (at {})",             p
+            //         ),
+            //     }
+            // });
+            //
+            // print_grid(&combined_grid, |b| match b {
+            //     None => block_char::LIGHT_SHADE,
+            //     Some(Tile::Terrain) => block_char::MEDIUM_SHADE,
+            //     Some(Tile::Support) => block_char::FULL,
+            // });
+        },
+    )?;
+
     Ok(())
+}
+
+/// Repeats a closure similar to a `for` loop, advancing the state using another
+/// closure based on feedback from the loop.
+///
+/// Both the called closure and the iterator closure can decide to stop the loop
+/// by returning [`ControlFlow::Break`]. The iteration index is also provided
+/// automatically. Both closures are [`FnMut`], so they can keep an internal
+/// mutable state, too.
+///
+/// These closures are run in sequence, effectively no different from a loop
+/// with iteration statements at the end, but this wrapper helps separate the
+/// action and iteration. The main closure takes `T` as input, producing
+/// [`ControlFlow<B, U>`][`ControlFlow`] as feedback ([`ControlFlow::Continue`]
+/// to continue, [`ControlFlow::Break`] to terminate). The `after_each` iterator
+/// then receives `U` as input, producing [`ControlFlow<B, T>`][`ControlFlow`]
+/// again for the next iteration (or, again, returning [`ControlFlow::Break`] to
+/// terminate).
+fn loop_with_feedback<T, U, B, F, C>(initial: T, mut after_each: F, mut closure: C) -> B
+where
+    F: FnMut(usize, U) -> ControlFlow<B, T>,
+    C: FnMut(usize, T) -> ControlFlow<B, U>,
+{
+    let mut input = initial;
+    let mut iteration = 0;
+    loop {
+        let output = match closure(iteration, input) {
+            ControlFlow::Continue(output) => output,
+            ControlFlow::Break(result) => return result,
+        };
+        input = match after_each(iteration, output) {
+            ControlFlow::Continue(input) => input,
+            ControlFlow::Break(result) => return result,
+        };
+
+        iteration += 1;
+    }
 }
 
 fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {

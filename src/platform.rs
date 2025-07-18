@@ -54,7 +54,6 @@ impl Platform {
     }
 }
 
-
 macro_rules! platform {
     (1x1 @ $x:literal, $y:literal) => {
         Platform::new(Point::new($x, $y), PlatformType::Square1x1)

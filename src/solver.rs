@@ -1,4 +1,4 @@
-use std::{array, collections::HashMap, io::Write, iter::once};
+use std::{array, collections::HashMap, io::Write, iter::once, ops::Deref};
 
 use anyhow::{Context, bail};
 use log::{error, info};
@@ -208,11 +208,12 @@ impl Solver<'_> {
         &self.instance
     }
 
+    // TODO: Try to return Solution, keeping it tied to this Solver's World
     pub fn solve(
         &mut self,
         interrupter: InterrupterContainer,
         max_cardinality: usize,
-    ) -> Result<Option<Solution>, SolveError> {
+    ) -> Result<Option<SolutionData>, SolveError> {
         let mut sat_solver = GlucoseSimp::default();
         *interrupter.lock().expect("Mutex was poisoned!") =
             Some(Box::new(sat_solver.interrupter()));
@@ -254,14 +255,41 @@ impl Solver<'_> {
 
         info!(target: "solver", "Solution found ({} marked)", sol.platform_count());
 
-        Ok(Some(sol))
+        Ok(Some(sol.into_data()))
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Solution<'a> {
+pub struct SolutionData {
     platforms: HashMap<Point, PlatformType>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Solution<'a> {
+    data: SolutionData,
     world: &'a World,
+}
+
+impl Deref for Solution<'_> {
+    type Target = SolutionData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl SolutionData {
+    pub fn platforms(&self) -> &HashMap<Point, PlatformType> {
+        &self.platforms
+    }
+
+    pub fn platform_count(&self) -> usize {
+        self.platforms.len()
+    }
+
+    pub fn get_platform(&self, p: Point) -> Option<Platform> {
+        self.platforms.get(&p).map(|t| Platform::new(p, *t))
+    }
 }
 
 impl Solution<'_> {
@@ -288,19 +316,11 @@ impl Solution<'_> {
             }
         }
 
-        Solution { platforms, world }
+        Solution { data: SolutionData { platforms }, world }
     }
 
-    pub fn platforms(&self) -> &HashMap<Point, PlatformType> {
-        &self.platforms
-    }
-
-    pub fn platform_count(&self) -> usize {
-        self.platforms.len()
-    }
-
-    pub fn get_platform(&self, p: Point) -> Option<Platform> {
-        self.platforms.get(&p).map(|t| Platform::new(p, *t))
+    pub fn into_data(self) -> SolutionData {
+        self.data
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
