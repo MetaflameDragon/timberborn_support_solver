@@ -5,6 +5,7 @@ use crate::{
     point::{Point, PointTy},
 };
 
+#[derive(Clone, Debug)]
 pub struct Grid<T> {
     data: Vec<T>,
     dims: Dimensions,
