@@ -10,16 +10,16 @@ use std::{
 
 use anyhow::{Context, bail};
 use assertables::{assert_gt, assert_le};
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, builder::TypedValueParser};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use dimensions::Dimensions;
 use grid::Grid;
 use log::{info, warn};
-use rustsat::solvers::{InterruptSolver, Solve};
+use rustsat::solvers::InterruptSolver;
 use world::World;
 
 use crate::{
     dimensions::DimTy,
-    solver::{Solution, SolutionData, SolveError, Solver},
+    solver::{SolutionData, SolveError, Solver},
 };
 
 mod dimensions;
