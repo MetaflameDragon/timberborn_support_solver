@@ -126,9 +126,8 @@ fn main() -> anyhow::Result<()> {
         // i.e. if you can't place a smaller platform, you can't place a larger one
         // either
         instance.add_lit_impl_lit(var_5.pos_lit(), var_3.pos_lit());
-        log_implication("P5", p, "P3", p);
+
         instance.add_lit_impl_lit(var_3.pos_lit(), var_1.pos_lit());
-        log_implication("P3", p, "P1", p);
     }
 
     // Handle platform overlap
@@ -154,7 +153,6 @@ fn main() -> anyhow::Result<()> {
                 let Some(var_1x1) = vars.platforms_1x1.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_5x5.pos_lit(), var_1x1.neg_lit());
-                log_implication("P5", p, "~P1", p_other);
             }
         }
 
@@ -168,7 +166,6 @@ fn main() -> anyhow::Result<()> {
                 let Some(var_3x3) = vars.platforms_3x3.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_5x5.pos_lit(), var_3x3.neg_lit());
-                log_implication("P5", p, "~P3", p_other);
             }
         }
 
@@ -182,7 +179,6 @@ fn main() -> anyhow::Result<()> {
                 let Some(var_5x5_b) = vars.platforms_5x5.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_5x5.pos_lit(), var_5x5_b.neg_lit());
-                log_implication("P5", p, "~P5", p_other);
             }
         }
     }
@@ -199,7 +195,6 @@ fn main() -> anyhow::Result<()> {
                 let Some(var_1x1) = vars.platforms_1x1.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_3x3.pos_lit(), var_1x1.neg_lit());
-                log_implication("P3", p, "~P1", p_other);
             }
         }
 
@@ -213,7 +208,6 @@ fn main() -> anyhow::Result<()> {
                 let Some(var_3x3_b) = vars.platforms_3x3.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_3x3.pos_lit(), var_3x3_b.neg_lit());
-                log_implication("P3", p, "~P3", p_other);
             }
         }
     }
@@ -245,21 +239,18 @@ fn main() -> anyhow::Result<()> {
             let lower_var = layers[lower_i];
             let upper_var = layers[upper_i];
             instance.add_lit_impl_lit(lower_var.pos_lit(), upper_var.pos_lit());
-            log_implication(&format!("T{lower_i}"), *p, &format!("T{upper_i}"), *p);
 
             // Support all neighbors
             for q in p.neighbors() {
                 if let Some(neighbor_column) = vars.terrain_layers.get(&q) {
                     let upper_var = neighbor_column[upper_i];
                     instance.add_lit_impl_lit(lower_var.pos_lit(), upper_var.pos_lit());
-                    log_implication(&format!("T{lower_i}"), *p, &format!("T{upper_i}"), q);
                 }
             }
         }
 
         // Require the topmost layer
         instance.add_unit(layers.last().unwrap().pos_lit());
-        log_unit(&format!("T{}", TERRAIN_SUPPORT_DISTANCE - 1), *p);
     }
 
     // 1x1 supports for terrain
@@ -267,7 +258,6 @@ fn main() -> anyhow::Result<()> {
         if let Some(tile_vars) = vars.terrain_layers.get(p) {
             let tile_var = tile_vars.first().unwrap();
             instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
-            log_implication("P1", *p, "T0", *p);
         }
     }
 
@@ -279,7 +269,6 @@ fn main() -> anyhow::Result<()> {
                 if let Some(tile_vars) = vars.terrain_layers.get(&q) {
                     let tile_var = tile_vars.first().unwrap();
                     instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
-                    log_implication("P3", *p, "T0", q);
                 }
             }
         }
@@ -293,7 +282,6 @@ fn main() -> anyhow::Result<()> {
                 if let Some(tile_vars) = vars.terrain_layers.get(&q) {
                     let tile_var = tile_vars.first().unwrap();
                     instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
-                    log_implication("P5", *p, "T0", q);
                 }
             }
         }
@@ -455,16 +443,6 @@ fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {
         .collect();
 
     Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")
-}
-
-fn log_unit(id: &str, p: Point) {
-    let Point { x, y } = p;
-    info!(target: "clauses", "{id}({x}, {y})");
-}
-fn log_implication(id_from: &str, p_from: Point, id_to: &str, p_to: Point) {
-    let Point { x: x_from, y: y_from } = p_from;
-    let Point { x: x_to, y: y_to } = p_to;
-    info!(target: "clauses", "{id_from}({x_from}, {y_from}) -> {id_to}({x_to}, {y_to})");
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
