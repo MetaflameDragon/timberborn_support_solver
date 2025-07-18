@@ -3,13 +3,16 @@
 use std::{
     array,
     collections::{HashMap, HashSet, VecDeque},
+    fs::File,
     io::Write,
     iter,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use anyhow::{Context, bail};
+use assertables::assert_gt;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use dimensions::Dimensions;
 use grid::Grid;
@@ -17,7 +20,7 @@ use log::{error, info, warn};
 use rustsat::{
     OutOfMemory,
     encodings::{card, card::Totalizer},
-    instances::{BasicVarManager, ManageVars, SatInstance},
+    instances::{BasicVarManager, ManageVars, ObjectVarManager, SatInstance},
     solvers::{Interrupt, InterruptSolver, Solve, SolverResult},
     types::{Assignment, Clause, Lit, Var, constraints::CardConstraint},
 };
@@ -72,6 +75,8 @@ fn parse_or_readline() -> anyhow::Result<Cli> {
 fn main() -> anyhow::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
+    let run_timestamp = chrono::Utc::now().format(r"%y%m%d_%H%M%S");
+
     let interrupter: Arc<Mutex<Option<Box<dyn InterruptSolver + Send>>>> =
         Arc::new(Mutex::new(None));
 
@@ -103,14 +108,7 @@ fn main() -> anyhow::Result<()> {
         Command::File { path } => load_grid_from_file(path)?,
     };
 
-    #[derive(Debug, Default, Clone)]
-    struct PlatformVars {
-        p_1x1: HashMap<Point, Var>,
-        p_3x3: HashMap<Point, Var>,
-        p_5x5: HashMap<Point, Var>,
-    }
-
-    let mut platform_vars: PlatformVars = Default::default();
+    let mut vars: Variables = Default::default();
 
     // Add vars for platforms, and implication clauses between them
     for p in terrain_grid.dims().iter_within() {
@@ -118,9 +116,9 @@ fn main() -> anyhow::Result<()> {
         let var_1 = vars_mgr.new_var();
         let var_3 = vars_mgr.new_var();
         let var_5 = vars_mgr.new_var();
-        platform_vars.p_1x1.insert(p, var_1);
-        platform_vars.p_3x3.insert(p, var_3);
-        platform_vars.p_5x5.insert(p, var_5);
+        vars.platforms_1x1.insert(p, var_1);
+        vars.platforms_3x3.insert(p, var_3);
+        vars.platforms_5x5.insert(p, var_5);
 
         // Implication clauses: larger => smaller
         // A smaller platform is always to be entirely contained within the larger one
@@ -128,7 +126,9 @@ fn main() -> anyhow::Result<()> {
         // i.e. if you can't place a smaller platform, you can't place a larger one
         // either
         instance.add_lit_impl_lit(var_5.pos_lit(), var_3.pos_lit());
+        log_implication("P5", p, "P3", p);
         instance.add_lit_impl_lit(var_3.pos_lit(), var_1.pos_lit());
+        log_implication("P3", p, "P1", p);
     }
 
     // Handle platform overlap
@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
     // TODO: simplify via implications P5(x,y) -> P3(x,y) -> P1(x,y) etc.
 
     // 5x5 <-> _
-    for (&p, &var_5x5) in platform_vars.p_5x5.iter() {
+    for (&p, &var_5x5) in vars.platforms_5x5.iter() {
         // 5x5 <-> 1x1
         for x in p.x..=(p.x + 4) {
             for y in p.y..=(p.y + 4) {
@@ -151,9 +151,10 @@ fn main() -> anyhow::Result<()> {
                 if p == p_other {
                     continue;
                 }
-                let Some(var_1x1) = platform_vars.p_1x1.get(&p_other).copied() else { continue };
+                let Some(var_1x1) = vars.platforms_1x1.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_5x5.pos_lit(), var_1x1.neg_lit());
+                log_implication("P5", p, "~P1", p_other);
             }
         }
 
@@ -164,9 +165,10 @@ fn main() -> anyhow::Result<()> {
                 if p == p_other {
                     continue;
                 }
-                let Some(var_3x3) = platform_vars.p_3x3.get(&p_other).copied() else { continue };
+                let Some(var_3x3) = vars.platforms_3x3.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_5x5.pos_lit(), var_3x3.neg_lit());
+                log_implication("P5", p, "~P3", p_other);
             }
         }
 
@@ -177,15 +179,16 @@ fn main() -> anyhow::Result<()> {
                 if p == p_other {
                     continue;
                 }
-                let Some(var_5x5_b) = platform_vars.p_5x5.get(&p_other).copied() else { continue };
+                let Some(var_5x5_b) = vars.platforms_5x5.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_5x5.pos_lit(), var_5x5_b.neg_lit());
+                log_implication("P5", p, "~P5", p_other);
             }
         }
     }
 
     // 3x3 <-> _
-    for (&p, &var_3x3) in platform_vars.p_3x3.iter() {
+    for (&p, &var_3x3) in vars.platforms_3x3.iter() {
         // 3x3 <-> 1x1
         for x in p.x..=(p.x + 2) {
             for y in p.y..=(p.y + 2) {
@@ -193,9 +196,10 @@ fn main() -> anyhow::Result<()> {
                 if p == p_other {
                     continue;
                 }
-                let Some(var_1x1) = platform_vars.p_1x1.get(&p_other).copied() else { continue };
+                let Some(var_1x1) = vars.platforms_1x1.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_3x3.pos_lit(), var_1x1.neg_lit());
+                log_implication("P3", p, "~P1", p_other);
             }
         }
 
@@ -206,9 +210,10 @@ fn main() -> anyhow::Result<()> {
                 if p == p_other {
                     continue;
                 }
-                let Some(var_3x3_b) = platform_vars.p_3x3.get(&p_other).copied() else { continue };
+                let Some(var_3x3_b) = vars.platforms_3x3.get(&p_other).copied() else { continue };
 
                 instance.add_lit_impl_lit(var_3x3.pos_lit(), var_3x3_b.neg_lit());
+                log_implication("P3", p, "~P3", p_other);
             }
         }
     }
@@ -219,75 +224,93 @@ fn main() -> anyhow::Result<()> {
     // clauses")?;
 
     // Terrain support goal clauses
-    const TERRAIN_SUPPORT_DISTANCE: usize = 3;
     // Terrain support distance is handled in "layers", like variables stacked on
     // top of one another
     // Tiles from each layer imply their neighbors in the next
     // All tiles in the topmost layer are goals
     // All tiles in the bottom-most layer are implied by
     // the platforms supporting them
-    let mut terrain_vars: HashMap<Point, [Var; TERRAIN_SUPPORT_DISTANCE]> = Default::default();
 
     // New vars for all occupied spaces in the terrain grid
     for p in terrain_grid.enumerate().filter_map(|(p, &v)| v.then_some(p)) {
-        terrain_vars.insert(p, array::from_fn(|_| instance.new_var()));
+        vars.terrain_layers.insert(p, array::from_fn(|_| instance.new_var()));
     }
 
-    for (p, vars) in &terrain_vars {
+    for (p, layers) in &vars.terrain_layers {
         // Layer implication clauses
         for lower_i in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
             let upper_i = lower_i + 1;
 
             // Support the tile directly above
-            let lower_var = vars[lower_i];
-            let upper_var = vars[upper_i];
+            let lower_var = layers[lower_i];
+            let upper_var = layers[upper_i];
             instance.add_lit_impl_lit(lower_var.pos_lit(), upper_var.pos_lit());
+            log_implication(&format!("T{lower_i}"), *p, &format!("T{upper_i}"), *p);
 
             // Support all neighbors
             for q in p.neighbors() {
-                if let Some(neighbor_column) = terrain_vars.get(&q) {
+                if let Some(neighbor_column) = vars.terrain_layers.get(&q) {
                     let upper_var = neighbor_column[upper_i];
                     instance.add_lit_impl_lit(lower_var.pos_lit(), upper_var.pos_lit());
+                    log_implication(&format!("T{lower_i}"), *p, &format!("T{upper_i}"), q);
                 }
             }
         }
 
         // Require the topmost layer
-        instance.add_unit(vars.last().unwrap().pos_lit());
+        instance.add_unit(layers.last().unwrap().pos_lit());
+        log_unit(&format!("T{}", TERRAIN_SUPPORT_DISTANCE - 1), *p);
     }
 
     // 1x1 supports for terrain
-    for (p, platform_var) in &platform_vars.p_1x1 {
-        if let Some(tile_vars) = terrain_vars.get(p) {
+    for (p, platform_var) in &vars.platforms_1x1 {
+        if let Some(tile_vars) = vars.terrain_layers.get(p) {
             let tile_var = tile_vars.first().unwrap();
             instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
+            log_implication("P1", *p, "T0", *p);
         }
     }
 
     // 3x3 supports for terrain
-    for (p, platform_var) in &platform_vars.p_3x3 {
+    for (p, platform_var) in &vars.platforms_3x3 {
         for x in p.x..=(p.x + 2) {
             for y in p.y..=(p.y + 2) {
                 let q = Point::new(x, y);
-                if let Some(tile_vars) = terrain_vars.get(&q) {
+                if let Some(tile_vars) = vars.terrain_layers.get(&q) {
                     let tile_var = tile_vars.first().unwrap();
                     instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
+                    log_implication("P3", *p, "T0", q);
                 }
             }
         }
     }
 
     // 5x5 supports for terrain
-    for (p, platform_var) in &platform_vars.p_5x5 {
+    for (p, platform_var) in &vars.platforms_5x5 {
         for x in p.x..=(p.x + 4) {
             for y in p.y..=(p.y + 4) {
                 let q = Point::new(x, y);
-                if let Some(tile_vars) = terrain_vars.get(&q) {
+                if let Some(tile_vars) = vars.terrain_layers.get(&q) {
                     let tile_var = tile_vars.first().unwrap();
                     instance.add_lit_impl_lit(platform_var.pos_lit(), tile_var.pos_lit());
+                    log_implication("P5", *p, "T0", q);
                 }
             }
         }
+    }
+
+    instance.convert_to_cnf();
+
+    {
+        let path = format!("{run_timestamp}_vars.log");
+        let mut file = File::create_new(&path)?;
+        info!("Writing variable map to {path}");
+        vars.write_var_map(&mut file)?;
+
+        let path = format!("{run_timestamp}_dimacs.log");
+        let mut file = File::create(&path)?;
+        info!("Writing DIMACS to {path}");
+        instance.write_dimacs(&mut file)?
     }
 
     let mut max_cardinality = args.start_count;
@@ -303,7 +326,7 @@ fn main() -> anyhow::Result<()> {
         println!("Solving for n <= {max_cardinality}...");
 
         let upper_constraint = CardConstraint::new_ub(
-            platform_vars.p_1x1.values().map(|var| var.pos_lit()),
+            vars.platforms_1x1.values().map(|var| var.pos_lit()),
             max_cardinality,
         );
 
@@ -322,19 +345,29 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
+        {
+            let path = format!("{run_timestamp}_assignment_ub_{max_cardinality}.log");
+            let mut file = File::create_new(&path)?;
+            info!("Writing assignment to {path}");
+
+            for lit in assignment.iter() {
+                writeln!(&mut file, "{}", lit)?;
+            }
+        }
+
         let mut sol: Solution = Default::default();
 
-        for (&p, &var) in &platform_vars.p_1x1 {
+        for (&p, &var) in &vars.platforms_1x1 {
             if assignment.var_value(var).to_bool_with_def(false) {
                 sol.platforms.insert(p, PlatformType::Square1x1);
             }
         }
-        for (&p, &var) in &platform_vars.p_3x3 {
+        for (&p, &var) in &vars.platforms_3x3 {
             if assignment.var_value(var).to_bool_with_def(false) {
                 sol.platforms.insert(p, PlatformType::Square3x3);
             }
         }
-        for (&p, &var) in &platform_vars.p_5x5 {
+        for (&p, &var) in &vars.platforms_5x5 {
             if assignment.var_value(var).to_bool_with_def(false) {
                 sol.platforms.insert(p, PlatformType::Square5x5);
             }
@@ -346,6 +379,7 @@ fn main() -> anyhow::Result<()> {
 
         let marked_count = sol.platforms.iter().count();
         println!("Solution: ({marked_count} marked)");
+        assert_gt!(marked_count, 0, "A solution should not have 0 platforms!");
 
         max_cardinality = marked_count - 1;
 
@@ -423,6 +457,16 @@ fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {
     Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")
 }
 
+fn log_unit(id: &str, p: Point) {
+    let Point { x, y } = p;
+    info!(target: "clauses", "{id}({x}, {y})");
+}
+fn log_implication(id_from: &str, p_from: Point, id_to: &str, p_to: Point) {
+    let Point { x: x_from, y: y_from } = p_from;
+    let Point { x: x_to, y: y_to } = p_to;
+    info!(target: "clauses", "{id_from}({x_from}, {y_from}) -> {id_to}({x_to}, {y_to})");
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 enum PlatformType {
     Square1x1,
@@ -433,6 +477,38 @@ enum PlatformType {
 #[derive(Clone, Debug, Default)]
 struct Solution {
     platforms: HashMap<Point, PlatformType>,
+}
+
+const TERRAIN_SUPPORT_DISTANCE: usize = 3;
+
+#[derive(Clone, Debug, Default)]
+struct Variables {
+    platforms_1x1: HashMap<Point, Var>,
+    platforms_3x3: HashMap<Point, Var>,
+    platforms_5x5: HashMap<Point, Var>,
+    terrain_layers: HashMap<Point, [Var; TERRAIN_SUPPORT_DISTANCE]>,
+}
+
+impl Variables {
+    pub fn write_var_map<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        for (prefix, hashmap) in
+            [("P1", &self.platforms_1x1), ("P3", &self.platforms_3x3), ("P5", &self.platforms_5x5)]
+        {
+            for (point, var) in hashmap {
+                let Point { x, y } = point;
+                writeln!(w, "{var} {prefix}({x},{y})")?;
+            }
+        }
+
+        for (point, layers) in &self.terrain_layers {
+            for (i, var) in layers.iter().enumerate() {
+                let Point { x, y } = point;
+                writeln!(w, "{var} T{i}({x},{y})")?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Error, Debug)]
