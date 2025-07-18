@@ -20,6 +20,7 @@ impl PlatformType {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Platform {
     point: Point,
     r#type: PlatformType,

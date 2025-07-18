@@ -1,23 +1,26 @@
 use std::{array, collections::HashMap, fs::File, io::Write, iter::once};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use assertables::{assert_gt, assert_le};
 use log::{error, info};
 use rustsat::{
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, SatInstance},
     solvers::{Interrupt, Solve, SolverResult},
-    types::{constraints::CardConstraint, Assignment, Var},
+    types::{Assignment, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 
 use crate::{
-    dimensions::Dimensions, grid::Grid, load_grid_from_file, point::Point, Command,
-    InterrupterContainer, TERRAIN_SUPPORT_DISTANCE,
+    Command, InterrupterContainer, TERRAIN_SUPPORT_DISTANCE,
+    dimensions::Dimensions,
+    grid::Grid,
+    load_grid_from_file,
+    platform::{Platform, PlatformType},
+    point::Point,
+    world::World,
 };
-use crate::platform::{Platform, PlatformType};
-use crate::world::World;
 
 pub struct Solver<'a> {
     vars: Variables,
@@ -286,8 +289,8 @@ impl Solution<'_> {
         self.platforms.iter().count()
     }
 
-    pub fn get_platform(&self, p: Point) -> Option<PlatformType> {
-        self.platforms.get(&p).copied()
+    pub fn get_platform(&self, p: Point) -> Option<Platform> {
+        self.platforms.get(&p).map(|t| Platform::new(p, *t))
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -297,6 +300,32 @@ impl Solution<'_> {
         }
 
         // Platform overlap
+        // TODO: should this collect all overlaps? only a few? or create a log file?
+        let overlapping_platforms: Vec<_> = self
+            .platforms
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (p1, t1))| {
+                self.platforms.iter().enumerate().filter_map(move |(j, (p2, t2))| {
+                    // Check only one triangle of the cross product
+                    (i < j).then_some({
+                        let plat_a = Platform::new(*p1, *t1);
+                        let plat_b = Platform::new(*p2, *t2);
+                        (plat_a, plat_b)
+                    })
+                })
+            })
+            .filter(|(plat_a, plat_b)| plat_a.overlaps(plat_b))
+            .collect();
+        if !overlapping_platforms.is_empty() {
+            for (plat_a, plat_b) in &overlapping_platforms {
+                error!(target: "validation", "Overlap! {:?} <-> {:?}", plat_a, plat_b);
+            }
+            bail!(
+                "The solution contains overlapping platforms ({} overlaps found)",
+                overlapping_platforms.len()
+            );
+        }
 
         Ok(())
     }
