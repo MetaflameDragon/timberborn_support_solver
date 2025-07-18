@@ -1,7 +1,6 @@
-use std::{array, collections::HashMap, env::Vars, fs::File, io::Write, iter::once};
+use std::{array, collections::HashMap, io::Write, iter::once};
 
-use anyhow::{Context, bail, ensure};
-use assertables::{assert_gt, assert_le};
+use anyhow::{Context, bail};
 use log::{error, info};
 use rustsat::{
     encodings::{card, card::Totalizer},
@@ -13,10 +12,7 @@ use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 
 use crate::{
-    Command, InterrupterContainer,
-    dimensions::Dimensions,
-    grid::Grid,
-    load_grid_from_file,
+    InterrupterContainer,
     platform::{Platform, PlatformType},
     point::Point,
     world::World,
@@ -179,7 +175,7 @@ impl Solver<'_> {
             // Lowest tile -> disjunction of all platforms below
             let mut platforms: Vec<Var> = Vec::new();
 
-            platforms.extend(vars.platforms_1x1.get(&p));
+            platforms.extend(vars.platforms_1x1.get(p));
             for x in (p.x - 2)..=p.x {
                 for y in (p.y - 2)..=p.y {
                     let q = Point::new(x, y);
@@ -244,7 +240,7 @@ impl Solver<'_> {
             }
         };
 
-        let mut sol: Solution = Solution::from_assignment(&assignment, &self.vars, self.world);
+        let sol = Solution::from_assignment(&assignment, &self.vars, self.world);
         if let Err(err) = sol.validate() {
             error!(target: "solver", "Error validating solution: {err:?}");
 
@@ -300,7 +296,7 @@ impl Solution<'_> {
     }
 
     pub fn platform_count(&self) -> usize {
-        self.platforms.iter().count()
+        self.platforms.len()
     }
 
     pub fn get_platform(&self, p: Point) -> Option<Platform> {
@@ -333,7 +329,7 @@ impl Solution<'_> {
             .collect();
         if !overlapping_platforms.is_empty() {
             for (plat_a, plat_b) in &overlapping_platforms {
-                error!(target: "validation", "Overlap! {:?} <-> {:?}", plat_a, plat_b);
+                error!(target: "validation", "Overlap! {plat_a:?} <-> {plat_b:?}");
             }
             bail!(
                 "The solution contains overlapping platforms ({} overlaps found)",

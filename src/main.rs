@@ -1,15 +1,10 @@
 #![allow(dead_code)]
 
 use std::{
-    array,
-    collections::{HashMap, HashSet, VecDeque},
     fs::File,
     io::Write,
-    iter,
-    iter::once,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use anyhow::{Context, bail};
@@ -17,22 +12,13 @@ use assertables::{assert_gt, assert_le};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, builder::TypedValueParser};
 use dimensions::Dimensions;
 use grid::Grid;
-use log::{error, info, warn};
-use rustsat::{
-    OutOfMemory,
-    encodings::{card, card::Totalizer},
-    instances::{BasicVarManager, ManageVars, ObjectVarManager, SatInstance},
-    solvers::{Interrupt, InterruptSolver, Solve, SolverResult},
-    types::{Assignment, Clause, Lit, Var, constraints::CardConstraint},
-};
-use rustsat_glucose::simp::Glucose as GlucoseSimp;
-use thiserror::Error;
+use log::{info, warn};
+use rustsat::solvers::{InterruptSolver, Solve};
 use world::World;
 
 use crate::{
     dimensions::DimTy,
-    point::Point,
-    solver::{Solution, SolveError, Solver},
+    solver::{SolveError, Solver},
 };
 
 mod dimensions;
@@ -107,7 +93,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }) {
-        warn!("Failed to set interrupt handler! {}", err);
+        warn!("Failed to set interrupt handler! {err}");
     }
     let args = parse_or_readline()?;
 
