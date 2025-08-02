@@ -1,13 +1,7 @@
 #![allow(dead_code)]
 
-use std::{
-    fs::File,
-    io::Write,
-    ops::ControlFlow,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-
+use std::{fs, fs::File, io::Write, ops::ControlFlow, path::PathBuf, sync::{Arc, Mutex}};
+use std::path::Path;
 use anyhow::{Context, bail};
 use assertables::{assert_gt, assert_le};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -110,12 +104,14 @@ fn main() -> anyhow::Result<()> {
     let mut solver = Solver::new(&world);
 
     {
-        let path = format!("{run_timestamp}_vars.log");
+        // TODO really dirty, clean up logging
+        fs::create_dir_all("logs/")?;
+        let path = format!("logs/{run_timestamp}_vars.log");
         info!("Writing variable map to {path}");
         let mut file = File::create_new(&path)?;
         solver.vars().write_var_map(&mut file)?;
 
-        let path = format!("{run_timestamp}_dimacs.log");
+        let path = format!("logs/{run_timestamp}_dimacs.log");
         info!("Writing DIMACS to {path}");
         let mut file = File::create(&path)?;
         solver.instance().write_dimacs(&mut file)?
