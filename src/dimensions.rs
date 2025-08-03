@@ -1,8 +1,9 @@
+use serde::{Deserialize, Serialize};
 use crate::point::{Point, PointTy};
 
 pub type DimTy = usize;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dimensions {
     pub width: DimTy,
     pub height: DimTy,

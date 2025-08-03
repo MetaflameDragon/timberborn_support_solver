@@ -1,11 +1,11 @@
 use std::ops::Div;
-
+use serde::{Deserialize, Serialize};
 use crate::{
     dimensions::Dimensions,
     point::{Point, PointTy},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid<T> {
     data: Vec<T>,
     dims: Dimensions,

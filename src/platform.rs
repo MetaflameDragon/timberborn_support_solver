@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use crate::point::Point;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PlatformType {
     Square1x1,
     Square3x3,
@@ -20,7 +21,7 @@ impl PlatformType {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Platform {
     point: Point,
     r#type: PlatformType,

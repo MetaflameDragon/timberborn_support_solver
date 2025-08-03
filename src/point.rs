@@ -5,13 +5,14 @@ use std::{
 };
 
 use rustsat::types::Lit;
+use serde::{Deserialize, Serialize};
 
 use crate::grid::Grid;
 // The math is a mess but whatever
 
 pub type PointTy = isize;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Default, Serialize, Deserialize)]
 pub struct Point {
     pub x: PointTy,
     pub y: PointTy,

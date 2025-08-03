@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::grid::Grid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct World {
     terrain_grid: Grid<bool>,
 }
