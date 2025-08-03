@@ -9,7 +9,7 @@ use rustsat::{
     types::{Assignment, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
-
+use serde::{Deserialize, Serialize};
 use crate::{
     platform::{Platform, PlatformType},
     point::Point,
@@ -100,6 +100,13 @@ impl SolverConfig {
     }
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub world: World
+    // TODO: run configs/profiles, previous sessions, etc.
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Variables {
     platforms_1x1: HashMap<Point, Var>,
@@ -145,7 +152,7 @@ fn encode_world_constraints(
     world: &World,
     instance: &mut SatInstance<BasicVarManager>,
 ) -> Variables {
-    let terrain_grid = world.terrain_grid();
+    let terrain_grid = world.grid();
 
     let mut vars: Variables = Default::default();
 

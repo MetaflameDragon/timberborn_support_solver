@@ -1,5 +1,6 @@
 /target
 
 test*.txt
+test*.toml
 *.log
 /logs/

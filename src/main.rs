@@ -9,19 +9,20 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use assertables::{assert_gt, assert_le};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use log::{info, warn};
 use rustsat::solvers::InterruptSolver;
+use serde::Deserialize;
 use timberborn_support_solver::{
-    Solution, SolverConfig, SolverResult, SolverRunConfig,
+    Project, Solution, SolverConfig, SolverResult, SolverRunConfig,
     dimensions::{DimTy, Dimensions},
     grid::Grid,
     platform::{Platform, PlatformType},
     point::Point,
     utils::loop_with_feedback,
-    world::World,
+    world::{World, WorldGrid},
 };
 
 #[derive(Parser)]
@@ -94,14 +95,16 @@ async fn main() -> anyhow::Result<()> {
     }
     let args = parse_or_readline()?;
 
-    let terrain_grid: Grid<bool> = match args.cmd {
-        Command::Rect { width, height } => Grid::new_fill(Dimensions::new(width, height), true),
-        Command::File { path } => load_grid_from_file(path)?,
+    let project: Project = match args.cmd {
+        Command::Rect { width, height } => {
+            let grid = WorldGrid(Grid::new_fill(Dimensions::new(width, height), true));
+            let world = World::new(grid);
+            Project { world }
+        }
+        Command::File { path } => load_toml(path)?,
     };
 
-    let world = World::new(terrain_grid);
-
-    let mut solver = SolverConfig::new(&world);
+    let mut solver = SolverConfig::new(&project.world);
 
     {
         // TODO really dirty, clean up logging
@@ -137,13 +140,13 @@ async fn main() -> anyhow::Result<()> {
         run_config.max_cardinality = sol.platform_count() - 1;
 
         info!("Solution: ({} platforms)", sol.platform_count());
-        print_solution(&world, &sol);
+        print_solution(&project.world, &sol);
     }
     Ok(())
 }
 
 fn print_solution(world: &World, solution_data: &Solution) {
-    let terrain_grid = world.terrain_grid();
+    let terrain_grid = world.grid();
     let dims = terrain_grid.dims();
 
     let mut char_grid = Grid::new_fill(dims, ' ');
@@ -179,46 +182,22 @@ fn print_solution(world: &World, solution_data: &Solution) {
     }
 }
 
-fn load_grid_from_file(path: PathBuf) -> anyhow::Result<Grid<bool>> {
+fn load_toml(path: PathBuf) -> anyhow::Result<Project> {
     println!(
         "Opening file {}",
         path.canonicalize().context("failed to canonicalize path")?.as_os_str().to_string_lossy()
     );
 
-    let file_str = std::fs::read_to_string(path).context("Failed to read file")?;
+    if let Some(ext) = path.extension() {
+        if ext != "toml" {
+            warn!("Loaded TOML file has unexpected extension: {}", ext.display());
+        }
+    } else {
+        warn!("Loaded TOML file has no extension");
+    };
 
-    let lines: Vec<_> = file_str.lines().collect();
-    if lines.is_empty() {
-        bail!("File is empty");
-    }
-
-    let dims = Dimensions::new(
-        lines.iter().map(|line| line.chars().count()).max().unwrap() as DimTy,
-        lines.len() as DimTy,
-    );
-
-    let grid_flat: Vec<bool> = lines
-        .iter()
-        .map(|line| -> anyhow::Result<Vec<bool>> {
-            let mut line: Vec<_> = line
-                .chars()
-                .map(|c| match c {
-                    ' ' => Ok(false),
-                    'X' => Ok(true),
-                    c => {
-                        bail!("invalid character '{}' (expected 'X' or ' ')", c);
-                    }
-                })
-                .collect::<Result<_, _>>()?;
-            line.resize(dims.width as usize, false);
-            Ok(line)
-        })
-        .collect::<Result<Vec<Vec<bool>>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-
-    Grid::try_from_vec(dims, grid_flat).context("Failed to create grid")
+    let bytes = fs::read(path).context("Failed to read file")?;
+    toml::from_slice(&bytes).context("Failed to parse TOML file")
 }
 
 fn print_grid<T>(grid: &Grid<T>, map_fn: impl Fn(&T) -> char) {
