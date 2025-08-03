@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, bail, ensure};
 use assertables::{assert_gt, assert_le};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use log::{info, warn};
+use log::{error, info, warn};
 use rustsat::solvers::InterruptSolver;
 use serde::Deserialize;
 use timberborn_support_solver::{
@@ -25,114 +25,148 @@ use timberborn_support_solver::{
     world::{World, WorldGrid},
 };
 
-#[derive(Parser)]
-struct Cli {
-    /// Initial support platform count to aim for (a high estimate).
-    start_count: usize,
+#[derive(Debug, Parser)]
+#[command(multicall = true)]
+struct ReplCli {
     #[command(subcommand)]
-    cmd: Command,
+    cmd: ReplCommand,
 }
 
-#[derive(Subcommand)]
-enum Command {
-    /// Calculates a solution for a filled rectangular area.
-    Rect { width: DimTy, height: DimTy },
-    /// Takes a file as the ceiling layout - each line is a row,
-    /// 'X' marks ceiling blocks, '.' or ' ' marks empty space.
-    File { path: PathBuf },
+#[derive(Debug, Subcommand)]
+enum ReplCommand {
+    /// Load a project
+    Load {
+        path: PathBuf,
+    },
+    /// View the currently loaded project's terrain
+    Terrain,
+    /// Solve platform placement for the currently loaded project
+    Solve {
+        /// Initial maximum platform count
+        start_upper_bound: usize,
+    },
+    Exit,
+    #[command(name = "?")]
+    ShowHelp,
 }
 
-fn parse_or_readline() -> anyhow::Result<Cli> {
-    // Args were provided (try to parse, exit on fail)
-    if std::env::args_os().len() > 1 {
-        return Ok(Cli::parse());
-    }
-
-    let mut cmd = Cli::command().no_binary_name(true);
-
-    println!("No CLI arguments were provided");
-    println!("Specify arguments via stdin:");
-    println!("{}", cmd.render_long_help());
-
-    std::io::stdout().flush().context("could not write to stdout")?;
+fn parse_repl() -> anyhow::Result<Result<ReplCli, clap::Error>> {
+    write!(std::io::stdout(), "$ ")?;
+    std::io::stdout().flush()?;
     let mut buffer = String::new();
     std::io::stdin().read_line(&mut buffer).context("could not read stdin")?;
-
     let args = shlex::split(buffer.trim()).context("invalid quoting")?;
-    let matches = cmd.try_get_matches_from(args).context("failed to parse args")?;
-
-    Cli::from_arg_matches(&matches).context("failed to parse args")
+    Ok(ReplCli::try_parse_from(&args))
 }
 
 type InterrupterContainer = Arc<Mutex<Option<Box<dyn InterruptSolver + Send>>>>;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+async fn repl_loop() -> anyhow::Result<()> {
+    ReplCli::command().print_long_help()?;
 
-    let run_timestamp = chrono::Utc::now().format(r"%y%m%d_%H%M%S");
+    struct LoadedProject {
+        project: Project,
+        path: PathBuf,
+    }
+    let mut loaded_project: Option<LoadedProject> = None;
 
-    let interrupter: InterrupterContainer = Arc::new(Mutex::new(None));
+    loop {
+        if let Some(LoadedProject { project: _project, path }) = &loaded_project {
+            // Try to show just the file name, fall back to the whole path
+            let proj_path_str = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+            info!("Currently loaded project: {}", proj_path_str);
+        };
 
-    if let Err(err) = ctrlc::set_handler({
-        let interrupter = interrupter.clone();
-        let mut is_repeat = false;
-        move || {
-            if is_repeat {
-                warn!("Aborting immediately");
-                std::process::exit(-1);
+        let cmd = match parse_repl()? {
+            Ok(cmd) => cmd,
+            Err(err) => {
+                error!("{}", err.to_string());
+                continue;
             }
+        };
 
-            is_repeat = true;
-            warn!("Stopping...");
-            // TODO: handle stdin somehow?
-            if let Some(int) = &*interrupter.lock().expect("Mutex was poisoned!") {
-                int.interrupt();
+        match cmd.cmd {
+            ReplCommand::Load { path } => {
+                let path = match path.canonicalize() {
+                    Ok(path) => path,
+                    Err(err) => {
+                        error!("Failed to canonicalize path: {}", err.to_string());
+                        continue;
+                    }
+                };
+                println!("Opening file {}", path.as_os_str().to_string_lossy());
+                let new_proj: Project =
+                    match fs::read(path.clone()).and_then(|data| Ok(toml::from_slice(&data))) {
+                        Ok(Ok(proj)) => proj,
+                        // IO error
+                        Err(err) => {
+                            error!("Error reading file: {}", err.to_string());
+                            continue;
+                        }
+                        // TOML error
+                        Ok(Err(err)) => {
+                            error!("Error parsing file: {}", err.to_string());
+                            continue;
+                        }
+                    };
+                loaded_project = Some(LoadedProject { project: new_proj, path });
+                info!("Loaded")
+            }
+            ReplCommand::Terrain => {
+                let Some(LoadedProject { project, .. }) = &loaded_project else {
+                    error!("No project loaded");
+                    continue;
+                };
+
+                print_world(&project.world, None);
+            }
+            ReplCommand::Solve { start_upper_bound } => {
+                let Some(LoadedProject { project, .. }) = &loaded_project else {
+                    error!("No project loaded");
+                    continue;
+                };
+
+                let mut solver = SolverConfig::new(&project.world);
+
+                let run_config = SolverRunConfig { max_cardinality: start_upper_bound };
+
+                if let Err(err) = run_solver(&project, solver, run_config).await {
+                    error!("Error while solving: {}", err.to_string());
+                }
+                info!("Done")
+            }
+            ReplCommand::Exit => {
+                return Ok(());
+            }
+            ReplCommand::ShowHelp => {
+                ReplCli::command().print_long_help()?;
             }
         }
-    }) {
-        warn!("Failed to set interrupt handler! {err}");
     }
-    let args = parse_or_readline()?;
+}
 
-    let project: Project = match args.cmd {
-        Command::Rect { width, height } => {
-            let grid = WorldGrid(Grid::new_fill(Dimensions::new(width, height), true));
-            let world = World::new(grid);
-            Project { world }
-        }
-        Command::File { path } => load_toml(path)?,
-    };
-
-    let mut solver = SolverConfig::new(&project.world);
-
-    {
-        // TODO really dirty, clean up logging
-        fs::create_dir_all("logs/")?;
-        let path = format!("logs/{run_timestamp}_vars.log");
-        info!("Writing variable map to {path}");
-        let mut file = File::create_new(&path)?;
-        solver.vars().write_var_map(&mut file)?;
-
-        let path = format!("logs/{run_timestamp}_dimacs.log");
-        info!("Writing DIMACS to {path}");
-        let mut file = File::create(&path)?;
-        solver.instance().write_dimacs(&mut file)?
-    }
-
+async fn run_solver(
+    project: &Project,
+    solver: SolverConfig,
+    mut run_config: SolverRunConfig,
+) -> anyhow::Result<()> {
     // Rather than a reverse for loop, this repeatedly looks for a solution with a
     // cardinality 1 lesser than each previous one. This means that, if there's a
     // high initial estimate, the SAT solver is likely to find a much more efficient
     // solution, and the solver doesn't step down by one each time unnecessarily.
 
-    let mut run_config = SolverRunConfig { max_cardinality: args.start_count };
-
     loop {
         info!("Solving for n <= {}...", run_config.max_cardinality);
         let sol = match solver.start(run_config)?.await?? {
             SolverResult::Sat(sol) => sol,
-            SolverResult::Unsat => break,
-            SolverResult::Aborted => break,
+            SolverResult::Unsat => {
+                info!("No solution found for the current constraints");
+                return Ok(());
+            }
+            SolverResult::Aborted => {
+                info!("Aborted");
+                return Ok(());
+            }
             SolverResult::Error(err) => return Err(err),
         };
 
@@ -140,12 +174,57 @@ async fn main() -> anyhow::Result<()> {
         run_config.max_cardinality = sol.platform_count() - 1;
 
         info!("Solution: ({} platforms)", sol.platform_count());
-        print_solution(&project.world, &sol);
+        print_world(&project.world, Some(&sol));
     }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
+
+    // let run_timestamp = chrono::Utc::now().format(r"%y%m%d_%H%M%S");
+
+    // TODO: reimplement interrupter once it's supported
+    // let interrupter: InterrupterContainer = Arc::new(Mutex::new(None));
+    //
+    // if let Err(err) = ctrlc::set_handler({
+    //     let interrupter = interrupter.clone();
+    //     let mut is_repeat = false;
+    //     move || {
+    //         if is_repeat {
+    //             warn!("Aborting immediately");
+    //             std::process::exit(-1);
+    //         }
+    //
+    //         is_repeat = true;
+    //         warn!("Stopping...");
+    //         if let Some(int) = &*interrupter.lock().expect("Mutex was poisoned!")
+    // {             int.interrupt();
+    //         }
+    //     }
+    // }) {
+    //     warn!("Failed to set interrupt handler! {err}");
+    // }
+
+    repl_loop().await?;
+
+    // {
+    //     // TODO really dirty, clean up logging
+    //     fs::create_dir_all("logs/")?;
+    //     let path = format!("logs/{run_timestamp}_vars.log");
+    //     info!("Writing variable map to {path}");
+    //     let mut file = File::create_new(&path)?;
+    //     solver.vars().write_var_map(&mut file)?;
+    //
+    //     let path = format!("logs/{run_timestamp}_dimacs.log");
+    //     info!("Writing DIMACS to {path}");
+    //     let mut file = File::create(&path)?;
+    //     solver.instance().write_dimacs(&mut file)?
+    // }
     Ok(())
 }
 
-fn print_solution(world: &World, solution_data: &Solution) {
+fn print_world(world: &World, solution: Option<&Solution>) {
     let terrain_grid = world.grid();
     let dims = terrain_grid.dims();
 
@@ -155,21 +234,23 @@ fn print_solution(world: &World, solution_data: &Solution) {
         char_grid.set(p, block_char::MEDIUM_SHADE).unwrap();
     }
 
-    for (point, platform) in solution_data.platforms() {
-        let platform = Platform::new(*point, *platform);
-        let (lower, upper) = platform.area_corners();
+    if let Some(solution) = solution {
+        for (point, platform) in solution.platforms() {
+            let platform = Platform::new(*point, *platform);
+            let (lower, upper) = platform.area_corners();
 
-        let fill = match platform.platform_type() {
-            PlatformType::Square1x1 => '1',
-            PlatformType::Square3x3 => '3',
-            PlatformType::Square5x5 => '5',
-        };
+            let fill = match platform.platform_type() {
+                PlatformType::Square1x1 => '1',
+                PlatformType::Square3x3 => '3',
+                PlatformType::Square5x5 => '5',
+            };
 
-        for y in lower.y..=upper.y {
-            for x in lower.x..=upper.x {
-                let q = Point::new(x, y);
-                // Pass if out of bounds
-                _ = char_grid.set(q, fill);
+            for y in lower.y..=upper.y {
+                for x in lower.x..=upper.x {
+                    let q = Point::new(x, y);
+                    // Pass if out of bounds
+                    _ = char_grid.set(q, fill);
+                }
             }
         }
     }
