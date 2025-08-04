@@ -221,13 +221,14 @@ async fn repl_loop() -> anyhow::Result<()> {
                 Ok(())
             }
             ReplCommand::Solve { start_upper_bound, limits } => {
-                let limits = try_into_platform_limits(limits)?;
+                let mut limits = try_into_platform_limits(limits)?;
+                limits.insert(PlatformType::Square1x1, start_upper_bound);
                 let Some(LoadedProject { project, .. }) = &state.loaded_project else {
                     bail!("No project loaded");
                 };
 
                 let solver = SolverConfig::new(&project.world);
-                let run_config = SolverRunConfig { max_cardinality: start_upper_bound, limits };
+                let run_config = SolverRunConfig { limits };
 
                 if let Err(err) = run_solver(&project, solver, run_config).await {
                     bail!("Error while solving: {}", err.to_string());
@@ -265,7 +266,7 @@ async fn run_solver(
     // solution, and the solver doesn't step down by one each time unnecessarily.
 
     loop {
-        info!("Solving for n <= {}...", run_config.max_cardinality);
+        // info!("Solving for n <= {}...", run_config.max_platforms());
         let sol = match solver.start(&run_config)?.await?? {
             SolverResult::Sat(sol) => sol,
             SolverResult::Unsat => {
@@ -279,10 +280,19 @@ async fn run_solver(
             SolverResult::Error(err) => return Err(err),
         };
 
-        assert_gt!(sol.platform_count(), 0, "Solution should have at least one platform");
-        run_config.max_cardinality = sol.platform_count() - 1;
+        if sol.platform_count() == 0 {
+            info!("Found a solution with no platforms - aborting");
+            return Ok(());
+        }
+        // assert_gt!(sol.platform_count(), 0, "Solution should have at least one
+        // platform");
+        run_config.limits_mut().insert(PlatformType::Square1x1, sol.platform_count() - 1);
 
-        info!("Solution: ({} platforms)", sol.platform_count());
+        info!("Solution found ({} platforms total)", sol.platform_count());
+        let platform_stats = sol.platform_stats();
+        for (ty, count) in platform_stats.iter() {
+            info!("{}: {}", ty.dimensions_str(), count);
+        }
         print_world(&project.world, Some(&sol));
     }
 }

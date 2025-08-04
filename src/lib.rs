@@ -1,8 +1,17 @@
-use std::{array, collections::HashMap, io::Write, iter::once};
+use std::{
+    array,
+    collections::HashMap,
+    io::Write,
+    iter::once,
+    num::NonZero,
+    ops::{Add, AddAssign},
+};
 
 use anyhow::Context;
-use derive_more::Deref;
+use derive_more::{Deref, DerefMut};
 use futures::{FutureExt, SinkExt, Stream, StreamExt};
+use log::info;
+use new_zealand::nz;
 use rustsat::{
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, SatInstance},
@@ -12,6 +21,7 @@ use rustsat::{
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
 use crate::{
     platform::{Platform, PlatformType},
     point::Point,
@@ -34,11 +44,28 @@ pub struct SolverConfig {
 
 #[derive(Debug, Clone)]
 pub struct SolverRunConfig {
-    pub max_cardinality: usize,
     pub limits: PlatformLimits,
 }
 
-#[derive(Clone, Debug, Deref)]
+impl SolverRunConfig {
+    /// The maximum number of platforms for the solution.
+    ///
+    /// This is the limit for 1x1 platforms, since they are the "superplatform"
+    /// of all other types (as in superset or superclass).
+    pub fn max_platforms(&self) -> Option<usize> {
+        self.limits.get(&PlatformType::Square1x1).copied()
+    }
+
+    pub fn limits(&self) -> &PlatformLimits {
+        &self.limits
+    }
+
+    pub fn limits_mut(&mut self) -> &mut PlatformLimits {
+        &mut self.limits
+    }
+}
+
+#[derive(Clone, Debug, Deref, DerefMut)]
 pub struct PlatformLimits(HashMap<PlatformType, usize>);
 
 impl PlatformLimits {
@@ -79,21 +106,30 @@ impl SolverConfig {
         cfg: &SolverRunConfig,
     ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<SolverResult>>> {
         let mut sat_solver = GlucoseSimp::default();
+        let vars = self.vars.clone();
         let (cnf, mut var_manager) = self.instance.clone().into_cnf();
         sat_solver.add_cnf(cnf).context("Failed to add CNF")?;
-        let vars = self.vars.clone();
 
-        let upper_constraint = CardConstraint::new_ub(
-            vars.platforms_1x1.values().map(|var| var.pos_lit()),
-            cfg.max_cardinality,
-        );
+        for (&platform_type, &limit) in cfg.limits().iter() {
+            // TODO: Clarify what the encoding means
+            // The cardinality constraints still work in terms of "platform promotion",
+            // where smaller platforms "promote" to larger ones, and the vars for
+            // larger ones imply all their predecessors.
+            // This means that limiting 5x5 to <= 2 and 3x3 to <= 4 actually means
+            // "at most 4 of 3x3 or larger, and at most 2 of 5x5".
+            info!("Limiting {} platforms to n <= {}", platform_type, limit);
+            let upper_constraint = CardConstraint::new_ub(
+                vars.platform_vars_map(platform_type).values().map(|var| var.pos_lit()),
+                limit,
+            );
 
-        card::encode_cardinality_constraint::<Totalizer, _>(
-            upper_constraint,
-            &mut sat_solver,
-            &mut var_manager,
-        )
-        .context("failed to encode cardinality constraint")?;
+            card::encode_cardinality_constraint::<Totalizer, _>(
+                upper_constraint,
+                &mut sat_solver,
+                &mut var_manager,
+            )
+            .context("failed to encode cardinality constraint")?;
+        }
 
         let solver_task = tokio::task::spawn_blocking(move || -> anyhow::Result<SolverResult> {
             use rustsat::solvers::SolverResult as SatSolverResult;
@@ -112,11 +148,9 @@ impl SolverConfig {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
-    pub world: World
-    // TODO: run configs/profiles, previous sessions, etc.
+    pub world: World, // TODO: run configs/profiles, previous sessions, etc.
 }
 
 #[derive(Clone, Debug, Default)]
@@ -128,6 +162,30 @@ pub struct Variables {
 }
 
 impl Variables {
+    /// A map of all variables for a specific platform type
+    pub fn platform_vars_map(&self, ty: PlatformType) -> &HashMap<Point, Var> {
+        match ty {
+            PlatformType::Square1x1 => &self.platforms_1x1,
+            PlatformType::Square3x3 => &self.platforms_3x3,
+            PlatformType::Square5x5 => &self.platforms_5x5,
+        }
+    }
+
+    /// Variable for a single platform
+    pub fn platform_var(&self, ty: PlatformType, point: Point) -> Option<Var> {
+        self.platform_vars_map(ty).get(&point).cloned()
+    }
+
+    /// Variable for a single terrain tile
+    pub fn terrain_var(&self, point: Point) -> Option<Var> {
+        self.terrain_layers.get(&point).map(|layer| layer[TERRAIN_SUPPORT_DISTANCE - 1])
+    }
+
+    /// All variables for terrain tiles
+    pub fn terrain_vars(&self) -> impl Iterator<Item = (Point, Var)> {
+        self.terrain_layers.iter().map(|(&p, l)| (p, l[TERRAIN_SUPPORT_DISTANCE - 1]))
+    }
+
     pub fn write_var_map<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
         for (var, repr) in self.to_var_repr_map() {
             writeln!(w, "{var} {repr}")?;
@@ -158,7 +216,6 @@ impl Variables {
         map
     }
 }
-
 
 fn encode_world_constraints(
     world: &World,
@@ -370,6 +427,25 @@ impl Solution {
 
     pub fn platform_count(&self) -> usize {
         self.platforms.len()
+    }
+
+    /// Counts the number of occurrences of all platform types and returns them
+    /// as a HashMap.
+    ///
+    /// Platform types with 0 occurrences do not appear in the map, as indicated
+    /// by the NonZero value type.
+    pub fn platform_stats(&self) -> HashMap<PlatformType, NonZero<usize>> {
+        /// Since this is used only for this one folding operation, the addition
+        /// simply panics on overflow, since we assume that there are no more
+        /// than usize platforms for any given type.
+        fn increment(n: &mut NonZero<usize>) {
+            *n = n.checked_add(1).unwrap();
+        }
+
+        self.platforms().iter().fold(HashMap::new(), |mut map, (_, &ty)| {
+            map.entry(ty).and_modify(increment).or_insert(nz!(1));
+            map
+        })
     }
 
     pub fn get_platform(&self, p: Point) -> Option<Platform> {

@@ -22,15 +22,19 @@ impl PlatformType {
             PlatformType::Square5x5 => (Point::new(0, 0), Point::new(4, 4)),
         }
     }
+
+    pub const fn dimensions_str(self) -> &'static str {
+        match self {
+            PlatformType::Square1x1 => "1x1",
+            PlatformType::Square3x3 => "3x3",
+            PlatformType::Square5x5 => "5x5",
+        }
+    }
 }
 
 impl Display for PlatformType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlatformType::Square1x1 => write!(f, "1x1"),
-            PlatformType::Square3x3 => write!(f, "3x3"),
-            PlatformType::Square5x5 => write!(f, "5x5"),
-        }
+        write!(f, "{}", self.dimensions_str())
     }
 }
 

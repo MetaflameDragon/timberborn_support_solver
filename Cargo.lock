@@ -672,6 +672,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "new_zealand"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03220249988d2e0ccda71df590e817de3d37483bc9a8c61a5d1b58648371b6cf"
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1001,6 +1007,7 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
+ "new_zealand",
  "rustsat",
  "rustsat-glucose",
  "serde",
