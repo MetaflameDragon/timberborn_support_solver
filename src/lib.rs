@@ -1,6 +1,7 @@
 use std::{array, collections::HashMap, io::Write, iter::once};
 
 use anyhow::Context;
+use derive_more::Deref;
 use futures::{FutureExt, SinkExt, Stream, StreamExt};
 use rustsat::{
     encodings::{card, card::Totalizer},
@@ -10,6 +11,7 @@ use rustsat::{
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use crate::{
     platform::{Platform, PlatformType},
     point::Point,
@@ -30,9 +32,19 @@ pub struct SolverConfig {
     instance: SatInstance,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct SolverRunConfig {
     pub max_cardinality: usize,
+    pub limits: PlatformLimits,
+}
+
+#[derive(Clone, Debug, Deref)]
+pub struct PlatformLimits(HashMap<PlatformType, usize>);
+
+impl PlatformLimits {
+    pub fn new(map: HashMap<PlatformType, usize>) -> Self {
+        Self(map)
+    }
 }
 
 pub enum SolverResult {
@@ -64,7 +76,7 @@ impl SolverConfig {
 
     pub fn start(
         &self,
-        cfg: SolverRunConfig,
+        cfg: &SolverRunConfig,
     ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<SolverResult>>> {
         let mut sat_solver = GlucoseSimp::default();
         let (cnf, mut var_manager) = self.instance.clone().into_cnf();

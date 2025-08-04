@@ -1,4 +1,7 @@
+use std::fmt::{Display, Formatter};
+
 use serde::{Deserialize, Serialize};
+
 use crate::point::Point;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -17,6 +20,16 @@ impl PlatformType {
             PlatformType::Square1x1 => (Point::new(0, 0), Point::new(0, 0)),
             PlatformType::Square3x3 => (Point::new(0, 0), Point::new(2, 2)),
             PlatformType::Square5x5 => (Point::new(0, 0), Point::new(4, 4)),
+        }
+    }
+}
+
+impl Display for PlatformType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlatformType::Square1x1 => write!(f, "1x1"),
+            PlatformType::Square3x3 => write!(f, "3x3"),
+            PlatformType::Square5x5 => write!(f, "5x5"),
         }
     }
 }

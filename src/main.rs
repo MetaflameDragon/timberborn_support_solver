@@ -1,23 +1,31 @@
 #![allow(dead_code)]
 
 use std::{
+    collections::HashMap,
+    ffi::OsStr,
     fs,
     fs::File,
     io::Write,
+    num::ParseIntError,
     ops::ControlFlow,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{Arc, Mutex},
 };
-use std::collections::HashMap;
+
 use anyhow::{Context, bail, ensure};
 use assertables::{assert_gt, assert_le};
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{
+    Arg, ArgAction, Command, CommandFactory, Error, FromArgMatches, Parser, Subcommand,
+    builder::{TypedValueParser, ValueParserFactory},
+    value_parser,
+};
 use log::{error, info, warn};
 use rustsat::solvers::InterruptSolver;
 use serde::Deserialize;
 use thiserror::Error;
 use timberborn_support_solver::{
-    Project, Solution, SolverConfig, SolverResult, SolverRunConfig,
+    PlatformLimits, Project, Solution, SolverConfig, SolverResult, SolverRunConfig,
     dimensions::{DimTy, Dimensions},
     grid::Grid,
     platform::{Platform, PlatformType},
@@ -53,11 +61,66 @@ enum ReplCommand {
     Solve {
         /// Initial maximum platform count
         start_upper_bound: usize,
+        #[arg(short = 'l', value_delimiter = ',')]
+        limits: Vec<PlatformLimitArg>,
     },
     #[command(visible_aliases = ["q"])]
     Exit,
     #[command(name = "?")]
     ShowHelp,
+}
+
+#[derive(Error, Debug)]
+enum PlatformLimitError {
+    #[error("duplicate limit for `{0}`")]
+    Duplicate(PlatformType),
+}
+
+fn try_into_platform_limits(
+    limit_args: Vec<PlatformLimitArg>,
+) -> Result<PlatformLimits, PlatformLimitError> {
+    let mut map = HashMap::new();
+    for PlatformLimitArg(ty, count) in limit_args.into_iter() {
+        if map.insert(ty, count).is_some() {
+            // Duplicate value
+            // Maybe needs a better error type? it's just one error path for now though
+            return Err(PlatformLimitError::Duplicate(ty));
+        }
+    }
+
+    Ok(PlatformLimits::new(map))
+}
+
+#[derive(Clone, Debug)]
+struct PlatformLimitArg(PlatformType, usize);
+
+#[derive(Error, Debug)]
+enum PlatformLimitArgParseError {
+    #[error("missing/invalid delimiter")]
+    MissingDelimiter,
+    #[error("invalid platform type `{0}`")]
+    InvalidType(String),
+    #[error("expected non-negative integer")]
+    InvalidValue(ParseIntError),
+}
+
+impl FromStr for PlatformLimitArg {
+    type Err = PlatformLimitArgParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use PlatformLimitArgParseError as Error;
+        let (key, value) = s.split_once(':').ok_or(Error::MissingDelimiter)?;
+        let r#type = match key.trim() {
+            "5" => PlatformType::Square5x5,
+            "3" => PlatformType::Square3x3,
+            // 1x1 omitted
+            other => return Err(Error::InvalidType(other.to_string())),
+        };
+
+        let count: usize = value.trim().parse().map_err(|err| Error::InvalidValue(err))?;
+
+        Ok(PlatformLimitArg(r#type, count))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -157,13 +220,14 @@ async fn repl_loop() -> anyhow::Result<()> {
 
                 Ok(())
             }
-            ReplCommand::Solve { start_upper_bound } => {
+            ReplCommand::Solve { start_upper_bound, limits } => {
+                let limits = try_into_platform_limits(limits)?;
                 let Some(LoadedProject { project, .. }) = &state.loaded_project else {
                     bail!("No project loaded");
                 };
 
                 let solver = SolverConfig::new(&project.world);
-                let run_config = SolverRunConfig { max_cardinality: start_upper_bound };
+                let run_config = SolverRunConfig { max_cardinality: start_upper_bound, limits };
 
                 if let Err(err) = run_solver(&project, solver, run_config).await {
                     bail!("Error while solving: {}", err.to_string());
@@ -202,7 +266,7 @@ async fn run_solver(
 
     loop {
         info!("Solving for n <= {}...", run_config.max_cardinality);
-        let sol = match solver.start(run_config)?.await?? {
+        let sol = match solver.start(&run_config)?.await?? {
             SolverResult::Sat(sol) => sol,
             SolverResult::Unsat => {
                 info!("No solution found for the current constraints");
