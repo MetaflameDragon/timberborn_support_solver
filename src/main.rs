@@ -59,8 +59,14 @@ enum ReplCommand {
     /// Solve platform placement for the currently loaded project
     #[command(visible_aliases = ["s"])]
     Solve {
-        /// Initial maximum platform count
-        start_upper_bound: usize,
+        /// Limits for platform types
+        ///
+        /// Limits are specified as `k:v` key-value pairs.
+        /// Multiple limits may be separated by commas, or the flag may be
+        /// specified multiple times.
+        ///
+        /// Example: `-l5:2,3:4 -l1:10`
+        /// ~ At most 2 5x5 platforms, at most 4 3x3 or larger, at most 10 1x1 or larger.
         #[arg(short = 'l', value_delimiter = ',')]
         limits: Vec<PlatformLimitArg>,
     },
@@ -113,7 +119,7 @@ impl FromStr for PlatformLimitArg {
         let r#type = match key.trim() {
             "5" => PlatformType::Square5x5,
             "3" => PlatformType::Square3x3,
-            // 1x1 omitted
+            "1" => PlatformType::Square1x1,
             other => return Err(Error::InvalidType(other.to_string())),
         };
 
@@ -220,9 +226,8 @@ async fn repl_loop() -> anyhow::Result<()> {
 
                 Ok(())
             }
-            ReplCommand::Solve { start_upper_bound, limits } => {
-                let mut limits = try_into_platform_limits(limits)?;
-                limits.insert(PlatformType::Square1x1, start_upper_bound);
+            ReplCommand::Solve { limits } => {
+                let limits = try_into_platform_limits(limits)?;
                 let Some(LoadedProject { project, .. }) = &state.loaded_project else {
                     bail!("No project loaded");
                 };
