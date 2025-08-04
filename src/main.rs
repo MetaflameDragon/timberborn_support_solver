@@ -25,7 +25,7 @@ use rustsat::solvers::InterruptSolver;
 use serde::Deserialize;
 use thiserror::Error;
 use timberborn_support_solver::{
-    PlatformLimits, Project, Solution, SolverConfig, SolverResult, SolverRunConfig,
+    PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
     dimensions::{DimTy, Dimensions},
     grid::Grid,
     platform::{Platform, PlatformType},
@@ -33,6 +33,8 @@ use timberborn_support_solver::{
     utils::loop_with_feedback,
     world::{World, WorldGrid},
 };
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
 #[command(multicall = true, arg_required_else_help = true, subcommand_required = true)]
@@ -56,7 +58,8 @@ enum ReplCommand {
     /// View the currently loaded project's terrain
     #[command(visible_aliases = ["view"])]
     Terrain,
-    /// Solve platform placement for the currently loaded project with optional solver limits.
+    /// Solve platform placement for the currently loaded project with optional
+    /// solver limits.
     #[command(visible_aliases = ["s"])]
     Solve {
         /// Limits for platform types
@@ -66,7 +69,8 @@ enum ReplCommand {
         /// specified multiple times.
         ///
         /// Example: `-l5:2,3:4 -l1:10`
-        /// ~ At most 2 5x5 platforms, at most 4 3x3 or larger, at most 10 1x1 or larger.
+        /// ~ At most 2 5x5 platforms, at most 4 3x3 or larger, at most 10 1x1
+        /// or larger.
         #[arg(short = 'l', value_delimiter = ',')]
         limits: Vec<PlatformLimitArg>,
     },
@@ -154,8 +158,6 @@ fn parse_repl() -> Result<ReplCli, ReplParseError> {
     Ok(ReplCli::try_parse_from(&args)?)
 }
 
-type InterrupterContainer = Arc<Mutex<Option<Box<dyn InterruptSolver + Send>>>>;
-
 async fn repl_loop() -> anyhow::Result<()> {
     ReplCli::command().print_long_help()?;
 
@@ -235,7 +237,11 @@ async fn repl_loop() -> anyhow::Result<()> {
                 let solver = SolverConfig::new(&project.world);
                 let run_config = SolverRunConfig { limits };
 
-                if let Err(err) = run_solver(&project, solver, run_config).await {
+                let res = select! {
+                    res = run_solver(&project, solver, run_config) => {res},
+
+                };
+                if let Err(err) = res {
                     bail!("Error while solving: {}", err.to_string());
                 }
                 info!("Done");
@@ -272,17 +278,17 @@ async fn run_solver(
 
     loop {
         // info!("Solving for n <= {}...", run_config.max_platforms());
-        let sol = match solver.start(&run_config)?.await?? {
-            SolverResult::Sat(sol) => sol,
-            SolverResult::Unsat => {
+        let (solver_future, interrupter) = solver.start(&run_config)?;
+        let sol = match solver_future.future().await? {
+            SolverResponse::Sat(sol) => sol,
+            SolverResponse::Unsat => {
                 info!("No solution found for the current constraints");
                 return Ok(());
             }
-            SolverResult::Aborted => {
+            SolverResponse::Aborted => {
                 info!("Aborted");
                 return Ok(());
             }
-            SolverResult::Error(err) => return Err(err),
         };
 
         if sol.platform_count() == 0 {

@@ -5,22 +5,26 @@ use std::{
     iter::once,
     num::NonZero,
     ops::{Add, AddAssign},
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::Poll,
 };
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
-use futures::{FutureExt, SinkExt, Stream, StreamExt};
+use futures::{FutureExt, SinkExt, Stream, StreamExt, TryFutureExt};
 use log::info;
 use new_zealand::nz;
 use rustsat::{
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, SatInstance},
-    solvers::Solve,
+    solvers::{Interrupt, InterruptSolver, Solve},
     types::{Assignment, Var, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     platform::{Platform, PlatformType},
@@ -74,15 +78,13 @@ impl PlatformLimits {
     }
 }
 
-pub enum SolverResult {
+pub enum SolverResponse {
     /// A solution from a valid assignment
     Sat(Solution),
     /// No solution found for the current problem
     Unsat,
     /// The solver session was aborted by the user
     Aborted,
-    /// The solver (unexpectedly) reported an error
-    Error(anyhow::Error),
 }
 
 impl SolverConfig {
@@ -101,10 +103,7 @@ impl SolverConfig {
         &self.instance
     }
 
-    pub fn start(
-        &self,
-        cfg: &SolverRunConfig,
-    ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<SolverResult>>> {
+    pub fn start(&self, cfg: &SolverRunConfig) -> anyhow::Result<(SolverFuture, Interrupter)> {
         let mut sat_solver = GlucoseSimp::default();
         let vars = self.vars.clone();
         let (cnf, mut var_manager) = self.instance.clone().into_cnf();
@@ -131,22 +130,50 @@ impl SolverConfig {
             .context("failed to encode cardinality constraint")?;
         }
 
-        let solver_task = tokio::task::spawn_blocking(move || -> anyhow::Result<SolverResult> {
+        let interrupter = Box::new(sat_solver.interrupter());
+
+        let handle = tokio::task::spawn_blocking(move || -> anyhow::Result<SolverResponse> {
             use rustsat::solvers::SolverResult as SatSolverResult;
             let result = match sat_solver.solve()? {
-                SatSolverResult::Sat => SolverResult::Sat(Solution::from_assignment(
+                SatSolverResult::Sat => SolverResponse::Sat(Solution::from_assignment(
                     &sat_solver.full_solution()?,
                     &vars,
                 )),
-                SatSolverResult::Unsat => SolverResult::Unsat,
-                SatSolverResult::Interrupted => SolverResult::Aborted,
+                SatSolverResult::Unsat => SolverResponse::Unsat,
+                SatSolverResult::Interrupted => SolverResponse::Aborted,
             };
             Ok(result)
         });
 
-        Ok(solver_task)
+        Ok((SolverFuture { handle }, interrupter))
     }
 }
+
+pub type Interrupter = Box<dyn InterruptSolver + Send>;
+
+pub struct SolverFuture {
+    handle: tokio::task::JoinHandle<anyhow::Result<SolverResponse>>,
+}
+
+impl SolverFuture {
+    pub fn handle(&self) -> &tokio::task::JoinHandle<anyhow::Result<SolverResponse>> {
+        &self.handle
+    }
+
+    pub fn future(self) -> impl Future<Output = anyhow::Result<SolverResponse>> {
+        self.handle.unwrap_or_else(|join_err| Err(anyhow!(join_err)))
+    }
+}
+
+// TODO maybe eventually write a proper IntoFuture
+// impl IntoFuture for SolverFuture {
+//     type Output = anyhow::Result<SolverResponse>;
+//     type IntoFuture = _;
+//
+//     fn into_future(self) -> Self::IntoFuture {
+//         core::future::IntoFuture::into_future(self.future())
+//     }
+// }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
