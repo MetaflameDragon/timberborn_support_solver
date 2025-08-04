@@ -8,13 +8,14 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-
+use std::collections::HashMap;
 use anyhow::{Context, bail, ensure};
 use assertables::{assert_gt, assert_le};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use log::{error, info, warn};
 use rustsat::solvers::InterruptSolver;
 use serde::Deserialize;
+use thiserror::Error;
 use timberborn_support_solver::{
     Project, Solution, SolverConfig, SolverResult, SolverRunConfig,
     dimensions::{DimTy, Dimensions},
@@ -26,7 +27,11 @@ use timberborn_support_solver::{
 };
 
 #[derive(Debug, Parser)]
-#[command(multicall = true)]
+#[command(multicall = true, arg_required_else_help = true, subcommand_required = true)]
+#[command(help_template = r#"
+{before-help}
+{all-args}{after-help}
+"#)]
 struct ReplCli {
     #[command(subcommand)]
     cmd: ReplCommand,
@@ -35,28 +40,49 @@ struct ReplCli {
 #[derive(Debug, Subcommand)]
 enum ReplCommand {
     /// Load a project
-    Load {
-        path: PathBuf,
-    },
+    #[command(visible_aliases = ["l"])]
+    Load { path: PathBuf },
+    /// Reload the current project from the most recent path
+    #[command(visible_aliases = ["r", "rel"])]
+    Reload,
     /// View the currently loaded project's terrain
+    #[command(visible_aliases = ["view"])]
     Terrain,
     /// Solve platform placement for the currently loaded project
+    #[command(visible_aliases = ["s"])]
     Solve {
         /// Initial maximum platform count
         start_upper_bound: usize,
     },
+    #[command(visible_aliases = ["q"])]
     Exit,
     #[command(name = "?")]
     ShowHelp,
 }
 
-fn parse_repl() -> anyhow::Result<Result<ReplCli, clap::Error>> {
+#[derive(Debug, Error)]
+enum ReplParseError {
+    #[error("Input was empty")]
+    Empty,
+    #[error(transparent)]
+    ParseError(#[from] anyhow::Error),
+    #[error(transparent)]
+    Clap(#[from] clap::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+fn parse_repl() -> Result<ReplCli, ReplParseError> {
     write!(std::io::stdout(), "$ ")?;
     std::io::stdout().flush()?;
     let mut buffer = String::new();
     std::io::stdin().read_line(&mut buffer).context("could not read stdin")?;
+    if buffer.trim().is_empty() {
+        return Err(ReplParseError::Empty);
+    }
+
     let args = shlex::split(buffer.trim()).context("invalid quoting")?;
-    Ok(ReplCli::try_parse_from(&args))
+    Ok(ReplCli::try_parse_from(&args)?)
 }
 
 type InterrupterContainer = Arc<Mutex<Option<Box<dyn InterruptSolver + Send>>>>;
@@ -64,85 +90,104 @@ type InterrupterContainer = Arc<Mutex<Option<Box<dyn InterruptSolver + Send>>>>;
 async fn repl_loop() -> anyhow::Result<()> {
     ReplCli::command().print_long_help()?;
 
+    struct State {
+        loaded_project: Option<LoadedProject>,
+    }
+
     struct LoadedProject {
         project: Project,
         path: PathBuf,
     }
-    let mut loaded_project: Option<LoadedProject> = None;
+    let mut state = State { loaded_project: None };
 
     loop {
-        if let Some(LoadedProject { project: _project, path }) = &loaded_project {
+        if let Some(LoadedProject { project: _project, path }) = &state.loaded_project {
             // Try to show just the file name, fall back to the whole path
             let proj_path_str = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
             info!("Currently loaded project: {}", proj_path_str);
         };
 
-        let cmd = match parse_repl()? {
-            Ok(cmd) => cmd,
+        let cli = match parse_repl() {
+            Ok(cli) => cli,
+            Err(ReplParseError::Empty) => {
+                ReplCli::command().print_long_help()?;
+                continue;
+            }
             Err(err) => {
                 error!("{}", err.to_string());
                 continue;
             }
         };
+        let cmd = cli.cmd;
 
-        match cmd.cmd {
+        if matches!(cmd, ReplCommand::Exit) {
+            return Ok(());
+        }
+
+        if let Err(err) = run_cmd(cmd, &mut state).await {
+            error!("{}", err.to_string());
+        }
+    }
+
+    async fn run_cmd(cmd: ReplCommand, state: &mut State) -> anyhow::Result<()> {
+        match cmd {
             ReplCommand::Load { path } => {
-                let path = match path.canonicalize() {
-                    Ok(path) => path,
-                    Err(err) => {
-                        error!("Failed to canonicalize path: {}", err.to_string());
-                        continue;
-                    }
+                state.loaded_project = Some(LoadedProject { project: load_project(&path)?, path });
+                info!("Loaded");
+
+                Ok(())
+            }
+            ReplCommand::Reload => {
+                let Some(LoadedProject { path, .. }) = &state.loaded_project else {
+                    bail!("No project loaded");
                 };
-                println!("Opening file {}", path.as_os_str().to_string_lossy());
-                let new_proj: Project =
-                    match fs::read(path.clone()).and_then(|data| Ok(toml::from_slice(&data))) {
-                        Ok(Ok(proj)) => proj,
-                        // IO error
-                        Err(err) => {
-                            error!("Error reading file: {}", err.to_string());
-                            continue;
-                        }
-                        // TOML error
-                        Ok(Err(err)) => {
-                            error!("Error parsing file: {}", err.to_string());
-                            continue;
-                        }
-                    };
-                loaded_project = Some(LoadedProject { project: new_proj, path });
-                info!("Loaded")
+
+                state.loaded_project =
+                    Some(LoadedProject { project: load_project(&path)?, path: path.clone() });
+                info!("Loaded");
+
+                Ok(())
             }
             ReplCommand::Terrain => {
-                let Some(LoadedProject { project, .. }) = &loaded_project else {
-                    error!("No project loaded");
-                    continue;
+                let Some(LoadedProject { project, .. }) = &state.loaded_project else {
+                    bail!("No project loaded");
                 };
 
                 print_world(&project.world, None);
+
+                Ok(())
             }
             ReplCommand::Solve { start_upper_bound } => {
-                let Some(LoadedProject { project, .. }) = &loaded_project else {
-                    error!("No project loaded");
-                    continue;
+                let Some(LoadedProject { project, .. }) = &state.loaded_project else {
+                    bail!("No project loaded");
                 };
 
-                let mut solver = SolverConfig::new(&project.world);
-
+                let solver = SolverConfig::new(&project.world);
                 let run_config = SolverRunConfig { max_cardinality: start_upper_bound };
 
                 if let Err(err) = run_solver(&project, solver, run_config).await {
-                    error!("Error while solving: {}", err.to_string());
+                    bail!("Error while solving: {}", err.to_string());
                 }
-                info!("Done")
+                info!("Done");
+
+                Ok(())
             }
-            ReplCommand::Exit => {
-                return Ok(());
-            }
+            ReplCommand::Exit => unreachable!(), // Handled by the main loop
             ReplCommand::ShowHelp => {
                 ReplCli::command().print_long_help()?;
+
+                Ok(())
             }
         }
     }
+}
+
+fn load_project(path: &Path) -> anyhow::Result<Project> {
+    let path = path.canonicalize().context("Failed to canonicalize path")?;
+    info!("Opening file {}", path.as_os_str().to_string_lossy());
+    let bytes = fs::read(path.clone()).context("Error reading file")?;
+
+    toml::from_slice(&bytes).context("Error parsing file")
 }
 
 async fn run_solver(
