@@ -56,7 +56,7 @@ enum ReplCommand {
     /// View the currently loaded project's terrain
     #[command(visible_aliases = ["view"])]
     Terrain,
-    /// Solve platform placement for the currently loaded project
+    /// Solve platform placement for the currently loaded project with optional solver limits.
     #[command(visible_aliases = ["s"])]
     Solve {
         /// Limits for platform types
@@ -183,7 +183,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 continue;
             }
             Err(err) => {
-                error!("{}", err.to_string());
+                print!("{}", err.to_string());
                 continue;
             }
         };
