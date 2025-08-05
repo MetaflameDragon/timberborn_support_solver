@@ -34,7 +34,7 @@ use timberborn_support_solver::{
     world::{World, WorldGrid},
 };
 use tokio::select;
-use tokio_util::sync::CancellationToken;
+use tokio_util::{future::FutureExt, sync::CancellationToken};
 
 #[derive(Debug, Parser)]
 #[command(multicall = true, arg_required_else_help = true, subcommand_required = true)]
@@ -279,6 +279,36 @@ async fn run_solver(
     loop {
         // info!("Solving for n <= {}...", run_config.max_platforms());
         let (solver_future, interrupter) = solver.start(&run_config)?;
+
+        let ctrl_c_cancellation = CancellationToken::new();
+        tokio::spawn({
+            let cancel = ctrl_c_cancellation.clone();
+            async move {
+                info!("Interrupt listener ready");
+                // TODO: better ctrl-c/interrupt handling
+                // Example: on unix, this listener will continue to capture SIGINT even after
+                // going out of scope, which might eat further SIGINTs if the program gets stuck
+                // elsewhere etc.
+                // Also, solver.start() takes a moment to run, and the user can press Ctrl-C
+                // during that time
+                // A global Ctrl-C listener that can cancel this whole task might be better
+
+                match tokio::signal::ctrl_c().with_cancellation_token_owned(cancel).await {
+                    None => {
+                        info!("Interrupt listener canceled");
+                    }
+                    Some(Ok(())) => {
+                        info!("Calling interrupt");
+                        interrupter.interrupt();
+                    }
+                    Some(Err(err)) => {
+                        error!("Interrupt listener error: {}", err);
+                    }
+                }
+            }
+        });
+        let _guard = ctrl_c_cancellation.drop_guard();
+
         let sol = match solver_future.future().await? {
             SolverResponse::Sat(sol) => sol,
             SolverResponse::Unsat => {
@@ -312,34 +342,10 @@ async fn run_solver(
 async fn main() -> anyhow::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
-    // let run_timestamp = chrono::Utc::now().format(r"%y%m%d_%H%M%S");
-
-    // TODO: reimplement interrupter once it's supported
-    // let interrupter: InterrupterContainer = Arc::new(Mutex::new(None));
-    //
-    // if let Err(err) = ctrlc::set_handler({
-    //     let interrupter = interrupter.clone();
-    //     let mut is_repeat = false;
-    //     move || {
-    //         if is_repeat {
-    //             warn!("Aborting immediately");
-    //             std::process::exit(-1);
-    //         }
-    //
-    //         is_repeat = true;
-    //         warn!("Stopping...");
-    //         if let Some(int) = &*interrupter.lock().expect("Mutex was poisoned!")
-    // {             int.interrupt();
-    //         }
-    //     }
-    // }) {
-    //     warn!("Failed to set interrupt handler! {err}");
-    // }
-
     repl_loop().await?;
 
+    // Earlier logging code
     // {
-    //     // TODO really dirty, clean up logging
     //     fs::create_dir_all("logs/")?;
     //     let path = format!("logs/{run_timestamp}_vars.log");
     //     info!("Writing variable map to {path}");
