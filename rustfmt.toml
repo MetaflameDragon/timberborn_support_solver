@@ -1,0 +1,12 @@
+style_edition = "2024"
+newline_style = "Auto"
+use_small_heuristics = "Max"
+
+merge_derives = false
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+
+use_field_init_shorthand = true
+
+comment_width = 80
+wrap_comments = true
