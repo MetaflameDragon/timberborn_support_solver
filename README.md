@@ -12,6 +12,8 @@ Besides everything that cargo already handles automatically, `rustsat-glucose` r
 
 # Usage
 
+**TODO:** Rewrite usage guide - the program now provides REPL rather than using CLI args. The REPL is fairly self-describing, and works quite similarly, but the guide below is still out of date.
+
 ```
 cargo run -r -- <START_COUNT> rect <WIDTH> <HEIGHT>
 cargo run -r -- <START_COUNT> file <PATH>
