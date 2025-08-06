@@ -2,11 +2,23 @@
 
 use std::fmt::{Display, Formatter};
 
+use derive_more::with_trait::IsVariant;
 use enum_iterator::Sequence;
 use enum_map::Enum;
 use serde::{Deserialize, Serialize};
 
-use crate::point::Point;
+use crate::{
+    platform::Orientation::{Horizontal, Vertical},
+    point::Point,
+};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize)]
+#[derive(Sequence, Enum, IsVariant)]
+pub enum Orientation {
+    Horizontal,
+    Vertical,
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[derive(Serialize, Deserialize)]
@@ -15,6 +27,7 @@ pub enum PlatformType {
     Square1x1,
     Square3x3,
     Square5x5,
+    Rect1x2(Orientation),
 }
 
 impl PlatformType {
@@ -22,19 +35,26 @@ impl PlatformType {
     /// origin).
     ///
     /// The first corner is at (0, 0), and the corner point is inclusive.
-    pub fn area_outer_corner_relative(self) -> Point {
+    pub const fn area_outer_corner_relative(self) -> Point {
+        use PlatformType::*;
         match self {
-            PlatformType::Square1x1 => Point::new(0, 0),
-            PlatformType::Square3x3 => Point::new(2, 2),
-            PlatformType::Square5x5 => Point::new(4, 4),
+            Square1x1 => Point::new(0, 0),
+            Square3x3 => Point::new(2, 2),
+            Square5x5 => Point::new(4, 4),
+
+            Rect1x2(o) => Point::new(0, 1).flipped_if(o.is_vertical()),
         }
     }
 
     pub const fn dimensions_str(self) -> &'static str {
+        use Orientation::*;
+        use PlatformType::*;
         match self {
-            PlatformType::Square1x1 => "1x1",
-            PlatformType::Square3x3 => "3x3",
-            PlatformType::Square5x5 => "5x5",
+            Square1x1 => "1x1",
+            Square3x3 => "3x3",
+            Square5x5 => "5x5",
+            Rect1x2(Horizontal) => "1x2",
+            Rect1x2(Vertical) => "2x1",
         }
     }
 }
@@ -88,6 +108,12 @@ macro_rules! platform {
     (1x1 @ $x:literal, $y:literal) => {
         Platform::new(Point::new($x, $y), PlatformType::Square1x1)
     };
+    (1x2 @ $x:literal, $y:literal) => {
+        Platform::new(Point::new($x, $y), PlatformType::Rect1x2(Horizontal))
+    };
+    (2x1 @ $x:literal, $y:literal) => {
+        Platform::new(Point::new($x, $y), PlatformType::Rect1x2(Vertical))
+    };
     (3x3 @ $x:literal, $y:literal) => {
         Platform::new(Point::new($x, $y), PlatformType::Square3x3)
     };
@@ -102,6 +128,8 @@ mod tests {
     use test_case::{test_case, test_matrix};
 
     use super::*;
+
+    // TODO: test other platform types?
 
     #[test_case(platform!(1x1 @ 2, 3), platform!(1x1 @ 2, 3))]
     #[test_case(platform!(1x1 @ 3, 3), platform!(1x1 @ 3, 3))]

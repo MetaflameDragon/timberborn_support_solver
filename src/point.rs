@@ -91,6 +91,16 @@ impl Point {
         let lower = self.y as u32;
         Lit::new_with_error(upper | lower, false).ok()
     }
+
+    /// Swaps x and y
+    pub const fn flipped(self) -> Point {
+        Point::new(self.y, self.x)
+    }
+
+    /// A conditional version of [`flipped`][`Self::flipped`]
+    pub const fn flipped_if(self, cond: bool) -> Point {
+        if cond { self.flipped() } else { self }
+    }
 }
 
 impl Add for Point {

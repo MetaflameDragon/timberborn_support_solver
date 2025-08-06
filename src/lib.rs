@@ -194,10 +194,12 @@ pub struct Variables {
 impl Variables {
     /// A map of all variables for a specific platform type
     pub fn platform_vars_map(&self, ty: PlatformType) -> &HashMap<Point, Var> {
+        use PlatformType::*;
         match ty {
-            PlatformType::Square1x1 => &self.platforms_1x1,
-            PlatformType::Square3x3 => &self.platforms_3x3,
-            PlatformType::Square5x5 => &self.platforms_5x5,
+            Square1x1 => &self.platforms_1x1,
+            Square3x3 => &self.platforms_3x3,
+            Square5x5 => &self.platforms_5x5,
+            Rect1x2(_) => todo!(),
         }
     }
 
