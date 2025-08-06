@@ -1,3 +1,5 @@
+#![feature(macro_metavar_expr_concat)]
+#![feature(trace_macros)]
 use std::{
     array,
     collections::HashMap,
@@ -200,6 +202,7 @@ impl Variables {
             Square3x3 => &self.platforms_3x3,
             Square5x5 => &self.platforms_5x5,
             Rect1x2(_) => todo!(),
+            Rect1x4(_) => todo!(),
         }
     }
 

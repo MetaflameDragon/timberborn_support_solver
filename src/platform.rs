@@ -12,6 +12,29 @@ use crate::{
     point::Point,
 };
 
+macro_rules! platform_impl {
+    (@var square $a:literal,? $($rest:tt),*) => {
+
+    };
+    (@var rect $a:literal x $b:literal,? $($tail:tt),*) => {
+        ${concat(Rect, $a, "x", $b)}(Orientation),
+        platform_impl!(@var $($tail),*),
+    };
+
+    ($ty_name:ident { $($tail:tt)* }) => {
+        pub enum $ty_name {
+            platform_impl!(@var $($tail)*),
+        }
+    }
+}
+
+trace_macros!(true);
+platform_impl!(Test {
+    rect 1x2,
+    rect 1x3,
+});
+trace_macros!(false);
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[derive(Serialize, Deserialize)]
 #[derive(Sequence, Enum, IsVariant)]

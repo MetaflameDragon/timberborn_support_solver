@@ -165,6 +165,7 @@ pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
             // platform -> terrain
             // Note that the implication in the SAT encoding will be reverse!
             // More specifically: terrain -> (plat1 | plat2 | ...) for all in-edges
+            // i.e. (~terrain | plat1 | plat2...)
             g.add_edge(plat.into(), point.into(), ());
         }
     }
