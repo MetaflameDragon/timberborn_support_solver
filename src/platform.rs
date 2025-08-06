@@ -99,7 +99,7 @@ macro_rules! platform {
 #[cfg(test)]
 mod tests {
     //noinspection RsUnusedImport
-    use test_case::test_matrix;
+    use test_case::{test_case, test_matrix};
 
     use super::*;
 
