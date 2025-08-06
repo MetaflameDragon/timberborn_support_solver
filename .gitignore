@@ -2,5 +2,6 @@
 
 test*.txt
 test*.toml
+!test/**
 *.log
 /logs/

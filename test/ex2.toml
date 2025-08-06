@@ -1,0 +1,19 @@
+[world]
+grid = [
+    "XX                   ",
+    "XXXX                 ",
+    "XXXXXX               ",
+    "XXXXXXXXXXX          ",
+    "XXXXXXXXXXXXXXXX     ",
+    "XXXXXXXXXXXXXXXX     ",
+    "XXXXXXXXXXXXXXXXX    ",
+    "XXXXXXXXXXXXXXXXXX   ",
+    "XXXXXXXX  XXXXXXXX   ",
+    "XXXXXXXX  XXXXXXXXX  ",
+    "XXXXXXXXXXXXXXXXXXX  ",
+    "XXXXXXXXXXXXXXXXXXX  ",
+    "XXXXXXXXXXXXXXXXXXXX ",
+    "XXXXXXXXXXXXXXXXXXXX ",
+    "XXXXXXXXXXX   XXXXXX ",
+    "XXXXXXXXXXX   XXXXXXX",
+]

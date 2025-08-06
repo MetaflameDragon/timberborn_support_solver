@@ -1,0 +1,9 @@
+[world]
+grid = [
+    "XXXXX",
+    "XXXXX",
+    "X  XX",
+    "X   X",
+    "X    ",
+    "XXX  ",
+]
