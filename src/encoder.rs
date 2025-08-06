@@ -144,6 +144,11 @@ pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
     for (plat, other) in
         iproduct!(enum_iterator::all::<PlatformType>(), enum_iterator::all::<PlatformType>())
     {
+        // Skip self loops! This makes it easier to use toposort later
+        if plat == other {
+            continue;
+        }
+
         let self_corner = plat.area_outer_corner_relative();
         let other_corner = other.area_outer_corner_relative();
         if self_corner.x >= other_corner.x && self_corner.y >= other_corner.y {
@@ -157,8 +162,10 @@ pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
         for point in
             Dimensions::new(self_corner.x as DimTy + 1, self_corner.y as DimTy + 1).iter_within()
         {
-            // terrain -> platform
-            g.add_edge(point.into(), plat.into(), ());
+            // platform -> terrain
+            // Note that the implication in the SAT encoding will be reverse!
+            // More specifically: terrain -> (plat1 | plat2 | ...) for all in-edges
+            g.add_edge(plat.into(), point.into(), ());
         }
     }
 
@@ -167,12 +174,13 @@ pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, io::Write, path::Path};
 
     use petgraph::{
+        EdgeType, Graph,
         adj::DefaultIx,
         dot::{Config, Dot},
-        graph::NodeIndex,
+        graph::{IndexType, NodeIndex},
     };
 
     use super::*;
@@ -183,28 +191,53 @@ mod tests {
 
         use petgraph::visit::NodeRef;
 
-        use crate::encoder::{Node, platform_type_graph};
-        let mut file = fs::File::options()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open("platform_graph.dot")
-            .expect("Failed to create/overwrite file.");
-        let binding = g.into_graph();
-        let string_g = binding.map(|_: NodeIndex<DefaultIx>, n| n, |_, _| String::new());
-        let dot = Dot::with_attr_getters(
-            &string_g,
-            &[Config::EdgeNoLabel],
-            &|_, _| String::new(),
-            &|_, n| {
-                match n.weight() {
-                    Node::Platform(_) => "group = \"platform\"",
-                    Node::Terrain(_) => "group = \"terrain\"",
-                }
-                .to_string()
-            },
-        );
+        let mut dag = g.into_graph::<DefaultIx>();
+        write_graph(&dag, "platform_graph.dot");
 
-        write!(file, "{}", dot).expect("Failed to write to file.");
+        let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
+        let (toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
+            _,
+            NodeIndex,
+        >(&dag, &node_topo);
+
+        let (graph_reduced, graph_closure) =
+            petgraph::algo::tred::dag_transitive_reduction_closure(&toposorted);
+
+        dbg!(&toposorted);
+        dbg!(&graph_reduced);
+
+        dag.retain_edges(|g, e| {
+            let (a, b) = g.edge_endpoints(e).unwrap(); // Should not fail - we just got e
+            graph_reduced.contains_edge(revmap[a.index()], revmap[b.index()])
+        });
+        write_graph(&dag, "platform_graph_reduced.dot");
+
+        fn write_graph<E, Ty, Ix, P: AsRef<Path>>(g: &Graph<Node, E, Ty, Ix>, path: P)
+        where
+            Ty: EdgeType,
+            Ix: IndexType,
+        {
+            let mut file = fs::File::options()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(path)
+                .expect("Failed to create/overwrite file.");
+            let string_g = g.map(|_: NodeIndex<Ix>, n| n, |_, _| String::new());
+            let dot = Dot::with_attr_getters(
+                &string_g,
+                &[Config::EdgeNoLabel],
+                &|_, _| String::new(),
+                &|_, n| {
+                    match n.weight() {
+                        Node::Platform(_) => "group = \"platform\"",
+                        Node::Terrain(_) => "group = \"terrain\"",
+                    }
+                    .to_string()
+                },
+            );
+
+            write!(file, "{}", dot).expect("Failed to write to file.");
+        }
     }
 }
