@@ -379,6 +379,7 @@ fn print_world(world: &World, solution: Option<&Solution>) {
                 PlatformType::Square1x1 => '1',
                 PlatformType::Square3x3 => '3',
                 PlatformType::Square5x5 => '5',
+                _ => todo!(),
             };
 
             for y in lower.y..=upper.y {
