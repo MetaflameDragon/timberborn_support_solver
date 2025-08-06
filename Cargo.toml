@@ -27,6 +27,11 @@ async-stream = "0.3.6"
 tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
 serde = { version = "1.0.219", features = ["derive"] }
 toml = "0.9.4"
-derive_more = { version = "2.0.1", features = ["deref", "deref_mut"] }
+derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from"] }
 new_zealand = "0.1.6"
 tokio-util = "0.7.16"
+enum-iterator = "2.1.0"
+enum-map = "2.7.3"
+petgraph = "0.8.2"
+itertools = "0.14.0"
+static_assertions = "1.1.0"

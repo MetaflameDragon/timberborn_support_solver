@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+
 use crate::point::{Point, PointTy};
 
 pub type DimTy = usize;
@@ -72,7 +73,7 @@ mod tests {
         let dims = Dimensions::new(7, 9);
         let points = dims.iter_within().collect::<Vec<_>>();
 
-        assert_len_eq_x!(points, 7 * 9);
+        assert_len_eq_x!(points.clone(), 7 * 9);
         assert_all!(points.iter(), |p: &Point| dims.contains(*p))
     }
 }

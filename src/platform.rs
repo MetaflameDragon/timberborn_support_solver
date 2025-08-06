@@ -1,10 +1,16 @@
+//! Utilities for working with platforms.
+
 use std::fmt::{Display, Formatter};
 
+use enum_iterator::Sequence;
+use enum_map::Enum;
 use serde::{Deserialize, Serialize};
 
 use crate::point::Point;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize)]
+#[derive(Sequence, Enum)]
 pub enum PlatformType {
     Square1x1,
     Square3x3,
@@ -12,14 +18,15 @@ pub enum PlatformType {
 }
 
 impl PlatformType {
-    /// Two corners of the area this platform covers (relative to the origin).
+    /// The outer corner of the area this platform covers (relative to the
+    /// origin).
     ///
-    /// Both points are inclusive, and `0.x <= 1.x && 0.y <= 1.y`.
-    pub fn area_corners_relative(self) -> (Point, Point) {
+    /// The first corner is at (0, 0), and the corner point is inclusive.
+    pub fn area_outer_corner_relative(self) -> Point {
         match self {
-            PlatformType::Square1x1 => (Point::new(0, 0), Point::new(0, 0)),
-            PlatformType::Square3x3 => (Point::new(0, 0), Point::new(2, 2)),
-            PlatformType::Square5x5 => (Point::new(0, 0), Point::new(4, 4)),
+            PlatformType::Square1x1 => Point::new(0, 0),
+            PlatformType::Square3x3 => Point::new(2, 2),
+            PlatformType::Square5x5 => Point::new(4, 4),
         }
     }
 
@@ -38,7 +45,8 @@ impl Display for PlatformType {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Serialize, Deserialize)]
 pub struct Platform {
     point: Point,
     r#type: PlatformType,
@@ -57,8 +65,8 @@ impl Platform {
     /// This is better than referring to a platform's inner `point` directly,
     /// since the point may be placed arbitrarily.
     pub fn area_corners(&self) -> (Point, Point) {
-        let (a, b) = self.r#type.area_corners_relative();
-        (a + self.point, b + self.point)
+        let b = self.r#type.area_outer_corner_relative();
+        (self.point, b + self.point)
     }
 
     pub fn overlaps(&self, other: &Self) -> bool {
@@ -91,7 +99,7 @@ macro_rules! platform {
 #[cfg(test)]
 mod tests {
     //noinspection RsUnusedImport
-    use test_case::{test_case, test_matrix};
+    use test_case::test_matrix;
 
     use super::*;
 

@@ -12,6 +12,8 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
+use enum_iterator::Sequence;
+use enum_map::EnumMap;
 use futures::{FutureExt, SinkExt, Stream, StreamExt, TryFutureExt};
 use log::info;
 use new_zealand::nz;
@@ -33,6 +35,7 @@ use crate::{
 };
 
 pub mod dimensions;
+mod encoder;
 pub mod grid;
 pub mod platform;
 pub mod point;
@@ -254,6 +257,11 @@ fn encode_world_constraints(
 
     // Add vars for platforms, and implication clauses between them
     for p in terrain_grid.dims().iter_within() {
+        let mut map: EnumMap<PlatformType, Option<Var>> = EnumMap::default();
+        for plat in enum_iterator::all::<PlatformType>() {
+            map[plat] = Some(instance.new_var()); // TODO
+        }
+
         let var_1 = instance.new_var();
         let var_3 = instance.new_var();
         let var_5 = instance.new_var();

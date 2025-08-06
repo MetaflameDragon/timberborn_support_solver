@@ -12,7 +12,9 @@ use crate::grid::Grid;
 
 pub type PointTy = isize;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Default, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Default)]
+#[derive(PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Serialize, Deserialize)]
 pub struct Point {
     pub x: PointTy,
     pub y: PointTy,
@@ -166,7 +168,7 @@ mod tests {
         let c = Point { x: 1, y: 2 };
         let manhattan_points = c.iter_within_manhattan(3).collect::<Vec<_>>();
 
-        assert_len_eq_x!(manhattan_points, 1 + 3 + 5 + 7 + 5 + 3 + 1);
+        assert_len_eq_x!(manhattan_points.clone(), 1 + 3 + 5 + 7 + 5 + 3 + 1);
         let order_predicate = |a: Point, b: Point| a.y < b.y || a.y == b.y && a.x < b.x;
         assert_all!(manhattan_points.windows(2), |pair: &[Point]| {
             order_predicate(pair[0], pair[1])
