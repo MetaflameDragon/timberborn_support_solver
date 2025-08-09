@@ -174,13 +174,16 @@ pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write, path::Path};
+    use std::{fs, io::Write, iter, path::Path};
 
+    use itertools::Itertools;
     use petgraph::{
-        EdgeType, Graph,
+        Direction, EdgeType, Graph,
         adj::DefaultIx,
         dot::{Config, Dot},
         graph::{IndexType, NodeIndex},
+        prelude::*,
+        visit::{IntoEdgeReferences, IntoEdges, IntoNodeReferences},
     };
 
     use super::*;
@@ -191,7 +194,7 @@ mod tests {
 
         use petgraph::visit::NodeRef;
 
-        let mut dag = g.into_graph::<DefaultIx>();
+        let dag = g.into_graph::<DefaultIx>();
         write_graph(&dag, "platform_graph.dot");
 
         let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
@@ -203,14 +206,47 @@ mod tests {
         let (graph_reduced, graph_closure) =
             petgraph::algo::tred::dag_transitive_reduction_closure(&toposorted);
 
+        dbg!(&node_topo);
         dbg!(&toposorted);
+        dbg!(&revmap);
         dbg!(&graph_reduced);
 
-        dag.retain_edges(|g, e| {
+        let mut platform_graph_reduced = dag.clone();
+        platform_graph_reduced.retain_edges(|g, e| {
             let (a, b) = g.edge_endpoints(e).unwrap(); // Should not fail - we just got e
             graph_reduced.contains_edge(revmap[a.index()], revmap[b.index()])
         });
-        write_graph(&dag, "platform_graph_reduced.dot");
+        write_graph(&platform_graph_reduced, "platform_graph_reduced.dot");
+
+        fn node_is_platform(g: &Graph<Node, ()>, i: NodeIndex) -> bool {
+            matches!(g[i], Node::Platform(_))
+        }
+
+        //
+        for (a, b) in platform_graph_reduced
+            .node_indices()
+            .flat_map(|i| {
+                node_is_platform(&platform_graph_reduced, i).then_some(
+                    platform_graph_reduced
+                        .edges_directed(i, Incoming)
+                        .map(|e| e.source())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .chain(iter::once(
+                platform_graph_reduced
+                    .externals(Outgoing)
+                    .filter(|i| node_is_platform(&platform_graph_reduced, *i))
+                    .collect::<Vec<_>>(),
+            ))
+            .flat_map(|nodes| nodes.into_iter().combinations(2).map(|combo| (combo[0], combo[1])))
+            .collect::<Vec<_>>()
+        {
+            println!(
+                "!{:?} | !{:?} | {:?}",
+                platform_graph_reduced[a], platform_graph_reduced[b], "_"
+            );
+        }
 
         fn write_graph<E, Ty, Ix, P: AsRef<Path>>(g: &Graph<Node, E, Ty, Ix>, path: P)
         where
