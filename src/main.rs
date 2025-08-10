@@ -26,9 +26,9 @@ use serde::Deserialize;
 use thiserror::Error;
 use timberborn_support_solver::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
-    dimensions::{DimTy, Dimensions},
+    dimensions::Dimensions,
     grid::Grid,
-    platform::{Platform, PlatformType},
+    platform::{Platform, PlatformDef},
     point::Point,
     utils::loop_with_feedback,
     world::{World, WorldGrid},
@@ -83,7 +83,7 @@ enum ReplCommand {
 #[derive(Error, Debug)]
 enum PlatformLimitError {
     #[error("duplicate limit for `{0}`")]
-    Duplicate(PlatformType),
+    Duplicate(PlatformDef),
 }
 
 fn try_into_platform_limits(
@@ -102,7 +102,7 @@ fn try_into_platform_limits(
 }
 
 #[derive(Clone, Debug)]
-struct PlatformLimitArg(PlatformType, usize);
+struct PlatformLimitArg(PlatformDef, usize);
 
 #[derive(Error, Debug)]
 enum PlatformLimitArgParseError {
@@ -120,12 +120,12 @@ impl FromStr for PlatformLimitArg {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use PlatformLimitArgParseError as Error;
         let (key, value) = s.split_once(':').ok_or(Error::MissingDelimiter)?;
-        let r#type = match key.trim() {
-            "5" => PlatformType::Square5x5,
-            "3" => PlatformType::Square3x3,
-            "1" => PlatformType::Square1x1,
+        let r#type = /*match key.trim() {
+            "5" => PlatformDef::Square5x5,
+            "3" => PlatformDef::Square3x3,
+            "1" => PlatformDef::Square1x1,
             other => return Err(Error::InvalidType(other.to_string())),
-        };
+        };*/ todo!();
 
         let count: usize = value.trim().parse().map_err(|err| Error::InvalidValue(err))?;
 
@@ -327,7 +327,9 @@ async fn run_solver(
         }
         // assert_gt!(sol.platform_count(), 0, "Solution should have at least one
         // platform");
-        run_config.limits_mut().insert(PlatformType::Square1x1, sol.platform_count() - 1);
+        // run_config.limits_mut().insert(PlatformDef::Square1x1, sol.platform_count() -
+        // 1);
+        todo!();
 
         info!("Solution found ({} platforms total)", sol.platform_count());
         let platform_stats = sol.platform_stats();
@@ -373,22 +375,23 @@ fn print_world(world: &World, solution: Option<&Solution>) {
     if let Some(solution) = solution {
         for (point, platform) in solution.platforms() {
             let platform = Platform::new(*point, *platform);
-            let (lower, upper) = platform.area_corners();
-
-            let fill = match platform.platform_type() {
-                PlatformType::Square1x1 => '1',
-                PlatformType::Square3x3 => '3',
-                PlatformType::Square5x5 => '5',
-                _ => todo!(),
-            };
-
-            for y in lower.y..=upper.y {
-                for x in lower.x..=upper.x {
-                    let q = Point::new(x, y);
-                    // Pass if out of bounds
-                    _ = char_grid.set(q, fill);
-                }
-            }
+            todo!();
+            // let (lower, upper) = platform.area_corners();
+            //
+            // let fill = match platform.platform_def() {
+            //     PlatformDef::Square1x1 => '1',
+            //     PlatformDef::Square3x3 => '3',
+            //     PlatformDef::Square5x5 => '5',
+            //     _ => todo!(),
+            // };
+            //
+            // for y in lower.y..=upper.y {
+            //     for x in lower.x..=upper.x {
+            //         let q = Point::new(x, y);
+            //         // Pass if out of bounds
+            //         _ = char_grid.set(q, fill);
+            //     }
+            // }
         }
     }
 

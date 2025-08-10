@@ -77,18 +77,19 @@
 
 use std::{
     cmp::Ordering,
+    collections::{HashMap, HashSet},
     fmt::{Display, Formatter},
-    hash::RandomState,
+    hash::Hash,
 };
 
 use derive_more::From;
 use enum_map::Enum;
-use itertools::iproduct;
-use petgraph::graphmap::DiGraphMap;
+use itertools::Itertools;
+use petgraph::{graph::DiGraph, graphmap::NodeTrait, prelude::NodeIndex};
 
 use crate::{
-    dimensions::{DimTy, Dimensions},
-    platform::PlatformType,
+    dimensions::Dimensions,
+    platform::{PLATFORMS_DEFAULT, PlatformDef},
     point::Point,
 };
 
@@ -96,7 +97,7 @@ use crate::{
 #[derive(Eq, PartialEq, Hash)]
 #[derive(From)]
 pub enum Node {
-    Platform(PlatformType),
+    Platform(Dimensions),
     Terrain(Point),
 }
 
@@ -107,7 +108,10 @@ impl Ord for Node {
             (Node::Terrain(a), Node::Terrain(b)) => a.cmp(b),
             (Node::Terrain(_), Node::Platform(_)) => Ordering::Less,
             (Node::Platform(_), Node::Terrain(_)) => Ordering::Greater,
-            (Node::Platform(a), Node::Platform(b)) => a.into_usize().cmp(&b.into_usize()),
+            (Node::Platform(a), Node::Platform(b)) => {
+                // Ordering specific to Node! Does not match dimension ordering
+                (a.width(), a.height()).cmp(&(b.width(), b.height()))
+            }
         }
     }
 }
@@ -122,50 +126,43 @@ impl PartialOrd for Node {
 impl Display for Node {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Node::Platform(plat) => write!(f, "Platform {plat}"),
+            Node::Platform(dims) => write!(f, "Platform {}x{}", dims.width(), dims.height()),
             Node::Terrain(Point { x, y }) => write!(f, "({x}, {y})"),
         }
     }
 }
 
-/// Creates a directed acyclic graph for platforms and terrain tiles.
-///
-/// For platforms `a` and `b`, `a <- b` iff `area(a) <: area(b)`, i.e. `b`
-/// entirely encapsulates `a`.
-///
-/// The graph is generated at runtime, so caching is recommended. It is also
-/// transitively closed. See also
-/// [`dag_transitive_reduction_closure`][`petgraph::algo::tred::dag_transitive_reduction_closure`].
-pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
-    // Note: RustRover handles conditionally disable type params incorrectly, so the
-    // default has to be specified explicitly
-    let mut g = DiGraphMap::<Node, (), _>::new();
+/// Maps dimensions to platform definitions, including rotated variants.
+pub fn platform_dim_map(
+    platform_defs: &[PlatformDef],
+) -> HashMap<Dimensions, HashSet<PlatformDef>> {
+    let mut map: HashMap<_, HashSet<PlatformDef>> = HashMap::new();
+    for p in platform_defs.iter() {
+        map.entry(p.dims()).or_default().insert(*p);
+        map.entry(p.dims().flipped()).or_default().insert(*p);
+    }
+    map
+}
 
-    for (plat, other) in
-        iproduct!(enum_iterator::all::<PlatformType>(), enum_iterator::all::<PlatformType>())
-    {
-        // Skip self loops! This makes it easier to use toposort later
-        if plat == other {
-            continue;
-        }
+/// Creates a directed acyclic graph for a set of items with [`PartialOrd`].
+///
+/// Uses a wrapper node type that must implement `Ord`
+pub fn dag_by_partial_ord<T>(items: &[T]) -> DiGraph<T, (), usize>
+where
+    T: PartialOrd + Clone + Eq + Hash,
+{
+    let mut g = DiGraph::<T, (), usize>::with_capacity(items.len(), items.len().saturating_sub(1));
 
-        let self_corner = plat.area_outer_corner_relative();
-        let other_corner = other.area_outer_corner_relative();
-        if self_corner.x >= other_corner.x && self_corner.y >= other_corner.y {
-            // larger (self) -> smaller (other)
-            g.add_edge(plat.into(), other.into(), ());
-        }
+    let mut item_map = HashMap::new();
+
+    for item in items {
+        item_map.insert(item, g.add_node(item.clone()));
     }
 
-    for plat in enum_iterator::all::<PlatformType>() {
-        let self_corner = plat.area_outer_corner_relative();
-        for point in
-            Dimensions::new(self_corner.x as DimTy + 1, self_corner.y as DimTy + 1).iter_within()
-        {
-            // platform -> terrain
-            // Note that the implication in the SAT encoding will be reverse!
-            // More specifically: terrain -> (plat1 | plat2 | ...) for all in-edges
-            g.add_edge(plat.into(), point.into(), ());
+    for (this, other) in items.iter().cartesian_product(items) {
+        if this > other {
+            // larger (self) -> smaller (other)
+            g.add_edge(item_map[this], item_map[other], ());
         }
     }
 
@@ -178,23 +175,24 @@ mod tests {
 
     use itertools::Itertools;
     use petgraph::{
-        Direction, EdgeType, Graph,
+        EdgeType, Graph,
         adj::DefaultIx,
         dot::{Config, Dot},
         graph::{IndexType, NodeIndex},
         prelude::*,
-        visit::{IntoEdgeReferences, IntoEdges, IntoNodeReferences},
+        visit::IntoNodeReferences,
     };
 
     use super::*;
 
     #[test]
     fn platform_type_graph_print() {
-        let g = platform_type_graph();
+        let platform_map = platform_dim_map(&PLATFORMS_DEFAULT);
+        let g = dag_by_partial_ord(&platform_map.keys().cloned().collect::<Vec<Dimensions>>());
 
         use petgraph::visit::NodeRef;
 
-        let dag = g.into_graph::<DefaultIx>();
+        let dag = g.map(|_, dim| Node::Platform(*dim), |_, e| *e);
         write_graph(&dag, "platform_graph.dot");
 
         let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
@@ -218,8 +216,12 @@ mod tests {
         });
         write_graph(&platform_graph_reduced, "platform_graph_reduced.dot");
 
-        fn node_is_platform(g: &Graph<Node, ()>, i: NodeIndex) -> bool {
-            matches!(g[i], Node::Platform(_))
+        fn node_is_platform<Ix: IndexType>(
+            g: &Graph<Node, (), Directed, Ix>,
+            i: NodeIndex<Ix>,
+        ) -> bool {
+            let node = (*g)[i];
+            matches!(node, Node::Platform(_))
         }
 
         //

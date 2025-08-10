@@ -1,9 +1,8 @@
 use std::ops::Div;
+
 use serde::{Deserialize, Serialize};
-use crate::{
-    dimensions::Dimensions,
-    point::{Point, PointTy},
-};
+
+use crate::{dimensions::Dimensions, point::Point};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid<T> {
@@ -54,14 +53,11 @@ impl<T> Grid<T> {
     }
 
     fn index_to_point(&self, index: usize) -> Point {
-        Point::new(
-            (index % self.dims.width as usize) as PointTy,
-            index.div(self.dims.width as usize) as PointTy,
-        )
+        Point::new((index % self.dims.width) as isize, index.div(self.dims.width) as isize)
     }
 
     pub fn try_from_vec(dims: Dimensions, data: Vec<T>) -> Option<Self> {
-        if dims.width as usize * dims.height as usize != data.len() {
+        if dims.width * dims.height != data.len() {
             return None;
         }
         Some(Grid { data, dims })

@@ -29,7 +29,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    platform::{Platform, PlatformType},
+    platform::{Platform, PlatformDef},
     point::Point,
     world::World,
 };
@@ -60,7 +60,8 @@ impl SolverRunConfig {
     /// This is the limit for 1x1 platforms, since they are the "superplatform"
     /// of all other types (as in superset or superclass).
     pub fn max_platforms(&self) -> Option<usize> {
-        self.limits.get(&PlatformType::Square1x1).copied()
+        todo!()
+        // self.limits.get(&PlatformDef::Square1x1).copied()
     }
 
     pub fn limits(&self) -> &PlatformLimits {
@@ -73,10 +74,10 @@ impl SolverRunConfig {
 }
 
 #[derive(Clone, Debug, Deref, DerefMut)]
-pub struct PlatformLimits(HashMap<PlatformType, usize>);
+pub struct PlatformLimits(HashMap<PlatformDef, usize>);
 
 impl PlatformLimits {
-    pub fn new(map: HashMap<PlatformType, usize>) -> Self {
+    pub fn new(map: HashMap<PlatformDef, usize>) -> Self {
         Self(map)
     }
 }
@@ -193,18 +194,19 @@ pub struct Variables {
 
 impl Variables {
     /// A map of all variables for a specific platform type
-    pub fn platform_vars_map(&self, ty: PlatformType) -> &HashMap<Point, Var> {
-        use PlatformType::*;
-        match ty {
-            Square1x1 => &self.platforms_1x1,
-            Square3x3 => &self.platforms_3x3,
-            Square5x5 => &self.platforms_5x5,
-            Rect1x2(_) => todo!(),
-        }
+    pub fn platform_vars_map(&self, ty: PlatformDef) -> &HashMap<Point, Var> {
+        todo!()
+        //
+        // match ty {
+        //     Square1x1 => &self.platforms_1x1,
+        //     Square3x3 => &self.platforms_3x3,
+        //     Square5x5 => &self.platforms_5x5,
+        //     Rect1x2(_) => todo!(),
+        // }
     }
 
     /// Variable for a single platform
-    pub fn platform_var(&self, ty: PlatformType, point: Point) -> Option<Var> {
+    pub fn platform_var(&self, ty: PlatformDef, point: Point) -> Option<Var> {
         self.platform_vars_map(ty).get(&point).cloned()
     }
 
@@ -259,10 +261,11 @@ fn encode_world_constraints(
 
     // Add vars for platforms, and implication clauses between them
     for p in terrain_grid.dims().iter_within() {
-        let mut map: EnumMap<PlatformType, Option<Var>> = EnumMap::default();
-        for plat in enum_iterator::all::<PlatformType>() {
-            map[plat] = Some(instance.new_var()); // TODO
-        }
+        // let mut map: EnumMap<PlatformDef, Option<Var>> = EnumMap::default();
+        // for plat in enum_iterator::all::<PlatformDef>() {
+        //     map[plat] = Some(instance.new_var()); // TODO
+        // }
+        todo!();
 
         let var_1 = instance.new_var();
         let var_3 = instance.new_var();
@@ -432,33 +435,34 @@ fn encode_world_constraints(
 
 #[derive(Clone, Debug)]
 pub struct Solution {
-    platforms: HashMap<Point, PlatformType>,
+    platforms: HashMap<Point, PlatformDef>,
 }
 
 impl Solution {
     pub fn from_assignment(assignment: &Assignment, variables: &Variables) -> Self {
         let mut platforms = HashMap::new();
 
-        for (&p, &var) in &variables.platforms_1x1 {
-            if assignment.var_value(var).to_bool_with_def(false) {
-                platforms.insert(p, PlatformType::Square1x1);
-            }
-        }
-        for (&p, &var) in &variables.platforms_3x3 {
-            if assignment.var_value(var).to_bool_with_def(false) {
-                platforms.insert(p, PlatformType::Square3x3);
-            }
-        }
-        for (&p, &var) in &variables.platforms_5x5 {
-            if assignment.var_value(var).to_bool_with_def(false) {
-                platforms.insert(p, PlatformType::Square5x5);
-            }
-        }
+        todo!();
+        // for (&p, &var) in &variables.platforms_1x1 {
+        //     if assignment.var_value(var).to_bool_with_def(false) {
+        //         platforms.insert(p, PlatformDef::Square1x1);
+        //     }
+        // }
+        // for (&p, &var) in &variables.platforms_3x3 {
+        //     if assignment.var_value(var).to_bool_with_def(false) {
+        //         platforms.insert(p, PlatformDef::Square3x3);
+        //     }
+        // }
+        // for (&p, &var) in &variables.platforms_5x5 {
+        //     if assignment.var_value(var).to_bool_with_def(false) {
+        //         platforms.insert(p, PlatformDef::Square5x5);
+        //     }
+        // }
 
         Solution { platforms }
     }
 
-    pub fn platforms(&self) -> &HashMap<Point, PlatformType> {
+    pub fn platforms(&self) -> &HashMap<Point, PlatformDef> {
         &self.platforms
     }
 
@@ -471,7 +475,7 @@ impl Solution {
     ///
     /// Platform types with 0 occurrences do not appear in the map, as indicated
     /// by the NonZero value type.
-    pub fn platform_stats(&self) -> HashMap<PlatformType, NonZero<usize>> {
+    pub fn platform_stats(&self) -> HashMap<PlatformDef, NonZero<usize>> {
         /// Since this is used only for this one folding operation, the addition
         /// simply panics on overflow, since we assume that there are no more
         /// than usize platforms for any given type.
