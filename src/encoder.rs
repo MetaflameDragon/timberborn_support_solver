@@ -177,7 +177,7 @@ mod tests {
     use petgraph::{
         EdgeType, Graph,
         adj::DefaultIx,
-        dot::{Config, Dot},
+        dot::{Config, Config::NodeNoLabel, Dot},
         graph::{IndexType, NodeIndex},
         prelude::*,
         visit::IntoNodeReferences,
@@ -192,8 +192,17 @@ mod tests {
 
         use petgraph::visit::NodeRef;
 
+        let getter = |dim: Dimensions| {
+            format!(
+                "{}x{}\\n({})",
+                dim.width(),
+                dim.height(),
+                platform_map.get(&dim).unwrap().iter().join(", ")
+            )
+        };
+
         let dag = g.map(|_, dim| Node::Platform(*dim), |_, e| *e);
-        write_graph(&dag, "platform_graph.dot");
+        write_graph(&dag, "platform_graph.dot", getter);
 
         let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
         let (toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
@@ -214,7 +223,7 @@ mod tests {
             let (a, b) = g.edge_endpoints(e).unwrap(); // Should not fail - we just got e
             graph_reduced.contains_edge(revmap[a.index()], revmap[b.index()])
         });
-        write_graph(&platform_graph_reduced, "platform_graph_reduced.dot");
+        write_graph(&platform_graph_reduced, "platform_graph_reduced.dot", getter);
 
         fn node_is_platform<Ix: IndexType>(
             g: &Graph<Node, (), Directed, Ix>,
@@ -250,8 +259,11 @@ mod tests {
             );
         }
 
-        fn write_graph<E, Ty, Ix, P: AsRef<Path>>(g: &Graph<Node, E, Ty, Ix>, path: P)
-        where
+        fn write_graph<E, Ty, Ix, P: AsRef<Path>, F: Fn(Dimensions) -> String>(
+            g: &Graph<Node, E, Ty, Ix>,
+            path: P,
+            dim_label_getter: F,
+        ) where
             Ty: EdgeType,
             Ix: IndexType,
         {
@@ -261,18 +273,19 @@ mod tests {
                 .truncate(true)
                 .open(path)
                 .expect("Failed to create/overwrite file.");
-            let string_g = g.map(|_: NodeIndex<Ix>, n| n, |_, _| String::new());
+            let string_g = g.map(|_: NodeIndex<Ix>, n| *n, |_, _| String::new());
+            let attr_getter = |_, n: (NodeIndex<Ix>, &Node)| match n.weight() {
+                Node::Platform(dim) => {
+                    format!("label = \"{}\" group = \"platform\"", dim_label_getter(*dim))
+                        .to_string()
+                }
+                Node::Terrain(_) => "group = \"terrain\"".to_string(),
+            };
             let dot = Dot::with_attr_getters(
                 &string_g,
-                &[Config::EdgeNoLabel],
+                &[Config::EdgeNoLabel, NodeNoLabel],
                 &|_, _| String::new(),
-                &|_, n| {
-                    match n.weight() {
-                        Node::Platform(_) => "group = \"platform\"",
-                        Node::Terrain(_) => "group = \"terrain\"",
-                    }
-                    .to_string()
-                },
+                &attr_getter,
             );
 
             write!(file, "{}", dot).expect("Failed to write to file.");
