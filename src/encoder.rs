@@ -144,9 +144,10 @@ pub fn platform_dim_map(
     map
 }
 
-/// Creates a directed acyclic graph for a set of items with [`PartialOrd`].
+/// Creates a directed acyclic graph for a set of items with [`PartialOrd`],
+/// such that smaller -> larger.
 ///
-/// Uses a wrapper node type that must implement `Ord`
+/// Uses a wrapper node type that must implement `Ord`.
 pub fn dag_by_partial_ord<T>(items: &[T]) -> DiGraph<T, (), usize>
 where
     T: PartialOrd + Clone + Eq + Hash,
@@ -160,9 +161,9 @@ where
     }
 
     for (this, other) in items.iter().cartesian_product(items) {
-        if this > other {
-            // larger (self) -> smaller (other)
-            g.add_edge(item_map[this], item_map[other], ());
+        if other < this {
+            // smaller (other) -> larger (this)
+            g.add_edge(item_map[other], item_map[this], ());
         }
     }
 
@@ -180,7 +181,7 @@ mod tests {
         dot::{Config, Config::NodeNoLabel, Dot},
         graph::{IndexType, NodeIndex},
         prelude::*,
-        visit::IntoNodeReferences,
+        visit::{IntoEdges, IntoNodeIdentifiers, IntoNodeReferences},
     };
 
     use super::*;
@@ -204,6 +205,11 @@ mod tests {
         let dag = g.map(|_, dim| Node::Platform(*dim), |_, e| *e);
         write_graph(&dag, "platform_graph.dot", getter);
 
+        // Guide:
+        // dag -> node_topo -> toposorted & revmap -> graph_reduced & graph_closure
+        // node_topo: graph_reduced index -> dag index
+        // revmap: dag index -> graph_reduced index
+
         let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
         let (toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
             _,
@@ -213,6 +219,7 @@ mod tests {
         let (graph_reduced, graph_closure) =
             petgraph::algo::tred::dag_transitive_reduction_closure(&toposorted);
 
+        dbg!(&dag);
         dbg!(&node_topo);
         dbg!(&toposorted);
         dbg!(&revmap);
@@ -233,30 +240,33 @@ mod tests {
             matches!(node, Node::Platform(_))
         }
 
-        //
-        for (a, b) in platform_graph_reduced
-            .node_indices()
-            .flat_map(|i| {
-                node_is_platform(&platform_graph_reduced, i).then_some(
-                    platform_graph_reduced
-                        .edges_directed(i, Incoming)
-                        .map(|e| e.source())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .chain(iter::once(
-                platform_graph_reduced
-                    .externals(Outgoing)
-                    .filter(|i| node_is_platform(&platform_graph_reduced, *i))
-                    .collect::<Vec<_>>(),
-            ))
-            .flat_map(|nodes| nodes.into_iter().combinations(2).map(|combo| (combo[0], combo[1])))
-            .collect::<Vec<_>>()
-        {
-            println!(
-                "!{:?} | !{:?} | {:?}",
-                platform_graph_reduced[a], platform_graph_reduced[b], "_"
-            );
+        for (a, b) in graph_reduced.node_identifiers().flat_map(|i| {
+            graph_reduced
+                .edges(i)
+                .map(|e| e.target())
+                .combinations(2)
+                .map(|combo| (combo[0], combo[1]))
+        }) {
+            // All nodes `n` such that `a ->+ n` and `b ->+ n`
+            let common_successors: Vec<_> = graph_closure
+                .edges(a)
+                .filter_map(|e| graph_closure.contains_edge(b, e.target()).then_some(e.target()))
+                .collect();
+            // Filters out nodes `n` for `m ->* n`
+            let common_successors_maximal: Vec<_> = common_successors
+                .iter()
+                .filter(|n| !common_successors.iter().any(|m| graph_closure.contains_edge(*m, **n)))
+                .collect();
+            // Result: pairs `a`, `b` and an associated set C, where:
+            // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
+            // `->+`: transitive successor (1 or more edges)
+            // `!->+`: not a transitive successor
+            let node_a = platform_graph_reduced[node_topo[a.index()]];
+            let node_b = platform_graph_reduced[node_topo[b.index()]];
+            let nodes_successors = common_successors_maximal
+                .into_iter()
+                .map(|i| platform_graph_reduced[node_topo[i.index()]]);
+            println!("!{} | !{} | {}", node_a, node_b, nodes_successors.into_iter().join(" | "));
         }
 
         fn write_graph<E, Ty, Ix, P: AsRef<Path>, F: Fn(Dimensions) -> String>(
