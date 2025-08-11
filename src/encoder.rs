@@ -1,5 +1,7 @@
 //! # Platform SAT encoding
 //!
+//! TODO: Rewrite/update
+//!
 //! There are various sizes of platforms, both rectangular and square-shaped. In
 //! particular, Timberborn has the basic 1x1 platform, then larger 3x3 and 5x5
 //! variants, and then rectangular ones from 1x2 to 1x6 (with rotated variants).
