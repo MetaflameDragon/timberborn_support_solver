@@ -80,19 +80,35 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    fmt::{Display, Formatter},
-    hash::Hash,
+    env::var,
+    fmt::{Debug, Display, Formatter},
+    hash::{Hash, Hasher},
+    iter,
+    marker::PhantomData,
 };
 
 use derive_more::From;
 use enum_map::Enum;
 use itertools::Itertools;
-use petgraph::{graph::DiGraph, graphmap::NodeTrait, prelude::NodeIndex};
+use petgraph::{
+    adj::{DefaultIx, IndexType},
+    graph::DiGraph,
+    graphmap::NodeTrait,
+    prelude::{NodeIndex, *},
+    visit::{IntoEdgeReferences, IntoEdges, IntoNodeIdentifiers},
+};
+use rustsat::{
+    instances::{BasicVarManager, Cnf, ManageVars, OptInstance, SatInstance},
+    types::{Clause, Var},
+};
 
 use crate::{
+    TERRAIN_SUPPORT_DISTANCE,
     dimensions::Dimensions,
+    grid::Grid,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
     point::Point,
+    world::WorldGrid,
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -134,6 +150,61 @@ impl Display for Node {
     }
 }
 
+// Might be useful to have a typed index? delete if not needed maybe
+struct TypedIx<T, Ix = DefaultIx>(Ix, PhantomData<T>);
+
+impl<T, Ix: Clone> Clone for TypedIx<T, Ix> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), self.1)
+    }
+}
+impl<T, Ix: Copy> Copy for TypedIx<T, Ix> {}
+impl<T, Ix: Default> Default for TypedIx<T, Ix> {
+    fn default() -> Self {
+        Self(Ix::default(), Default::default())
+    }
+}
+impl<T, Ix: Hash> Hash for TypedIx<T, Ix> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+impl<T, Ix: Ord> Ord for TypedIx<T, Ix> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+impl<T, Ix: PartialOrd> PartialOrd for TypedIx<T, Ix> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl<T, Ix: PartialEq> PartialEq for TypedIx<T, Ix> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+impl<T, Ix: Eq> Eq for TypedIx<T, Ix> {}
+impl<T, Ix: Debug> Debug for TypedIx<T, Ix> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TypedIx<{}>({:?})", std::any::type_name::<T>(), self.0)
+    }
+}
+
+unsafe impl<Ix: IndexType, T: 'static> IndexType for TypedIx<T, Ix> {
+    fn new(x: usize) -> Self {
+        Self(Ix::new(x), Default::default())
+    }
+
+    fn index(&self) -> usize {
+        self.0.index()
+    }
+
+    fn max() -> Self {
+        Self(<Ix as IndexType>::max(), Default::default())
+    }
+}
+
 /// Maps dimensions to platform definitions, including rotated variants.
 pub fn platform_dim_map(
     platform_defs: &[PlatformDef],
@@ -172,6 +243,179 @@ where
     g
 }
 
+#[derive(Clone, Debug)]
+struct EncodingTileVars {
+    platforms: HashMap<Dimensions, Var>,
+    terrain: Option<[Var; TERRAIN_SUPPORT_DISTANCE]>,
+}
+
+impl EncodingTileVars {
+    pub fn for_dims(&self, dims: Dimensions) -> Option<Var> {
+        self.platforms.get(&dims).cloned()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum EncodedItem {
+    Platform { point: Point, dims: Dimensions },
+    Terrain { point: Point, layer: usize },
+}
+
+#[derive(Clone, Debug)]
+struct EncodingVars {
+    dim_map: HashMap<Dimensions, HashSet<PlatformDef>>,
+    grid: Grid<EncodingTileVars>,
+    var_map: HashMap<Var, EncodedItem>,
+}
+
+impl EncodingVars {
+    pub fn new(
+        platform_defs: &[PlatformDef],
+        terrain: &WorldGrid,
+        var_man: &mut BasicVarManager,
+    ) -> Self {
+        let dim_map = platform_dim_map(platform_defs);
+
+        let dim_keys: Vec<_> = dim_map.keys().cloned().collect();
+        let grid = Grid::from_fn(terrain.dims(), |p| EncodingTileVars {
+            platforms: dim_keys.iter().cloned().map(|k| (k, var_man.new_var())).collect(),
+            terrain: terrain.get(p).unwrap().then_some(std::array::from_fn(|_| var_man.new_var())),
+        });
+        let mut var_map = HashMap::new();
+        for (point, vars) in grid.enumerate() {
+            for (&dims, &var) in vars.platforms.iter() {
+                var_map.insert(var, EncodedItem::Platform { point, dims });
+            }
+            for (layer, var) in vars.terrain.iter().flatten().enumerate() {
+                var_map.insert(*var, EncodedItem::Terrain { point, layer });
+            }
+        }
+        Self { dim_map, grid, var_map }
+    }
+
+    pub fn at(&self, point: Point) -> Option<&EncodingTileVars> {
+        self.grid.get(point)
+    }
+    pub fn for_dims_at(&self, point: Point, dims: Dimensions) -> Option<Var> {
+        self.grid.get(point)?.for_dims(dims)
+    }
+    pub fn platform_dims(&self) -> impl Iterator<Item = Dimensions> {
+        self.dim_map.keys().cloned().into_iter()
+    }
+}
+
+pub fn encode(
+    platform_defs: &[PlatformDef],
+    terrain: &WorldGrid,
+    instance: &mut SatInstance<BasicVarManager>,
+) -> EncodingVars {
+    let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
+
+    let dag = dag_by_partial_ord(&vars.platform_dims().collect_vec());
+
+    // Guide:
+    // dag -> topo -> toposorted & revmap -> graph_reduced & graph_closure
+    // topo[graph_reduced index] -> dag index
+    // revmap[dag index] -> graph_reduced index
+    enum Toposorted {};
+    let dims_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
+    let (dims_toposorted, dims_revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
+        _,
+        TypedIx<Toposorted>,
+    >(&dag, &dims_topo);
+
+    let (dims_graph_reduced, dims_graph_closure) =
+        petgraph::algo::tred::dag_transitive_reduction_closure(&dims_toposorted);
+
+    for p in terrain.dims().iter_within() {
+        let point_vars = vars.at(p).unwrap();
+
+        // ===== Platform selection DAG =====
+        for edge in dims_graph_reduced.edge_references() {
+            // The DAG has nodes ordered as smaller -> larger
+            // This means that 1x1 has no in-edges, and the largest platforms have no
+            // out-edges We want the implications encoded as smaller <- larger
+            let (dag_source, dag_target) =
+                (dims_topo[edge.source().index()], dims_topo[edge.target().index()]);
+
+            instance.add_lit_impl_lit(
+                point_vars.for_dims(dag[dag_target]).unwrap().pos_lit(),
+                point_vars.for_dims(dag[dag_source]).unwrap().pos_lit(),
+            );
+        }
+
+        for (a, b) in dims_graph_reduced.node_identifiers().flat_map(|i| {
+            dims_graph_reduced
+                .edges(i)
+                .map(|e| e.target())
+                .combinations(2)
+                .map(|combo| (combo[0], combo[1]))
+        }) {
+            // All nodes `n` such that `a ->+ n` and `b ->+ n`
+            let common_successors: Vec<_> = dims_graph_closure
+                .edges(a)
+                .filter_map(|e| {
+                    dims_graph_closure.contains_edge(b, e.target()).then_some(e.target())
+                })
+                .collect();
+            // Filters out nodes `n` for `m ->* n`
+            let common_successors_maximal: Vec<_> = common_successors
+                .iter()
+                .filter(|n| {
+                    !common_successors.iter().any(|m| dims_graph_closure.contains_edge(*m, **n))
+                })
+                .collect();
+            // Result: pairs `a`, `b` and an associated set C, where:
+            // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
+            // `->+`: transitive successor (1 or more edges)
+            // `!->+`: not a transitive successor
+
+            // (~a | ~b | i), or also (a & b) -> i
+            instance.add_cube_impl_clause(
+                &[
+                    point_vars.for_dims(dag[dims_topo[a.index()]]).unwrap().pos_lit(),
+                    point_vars.for_dims(dag[dims_topo[b.index()]]).unwrap().pos_lit(),
+                ],
+                &common_successors_maximal
+                    .into_iter()
+                    .map(|i| point_vars.for_dims(dag[dims_topo[i.index()]]).unwrap().pos_lit())
+                    .collect_vec(),
+            );
+        }
+
+        // ===== Terrain support =====
+
+        if let Some(point_terrain) = point_vars.terrain {
+            // For the current tile, get all neighbors
+            let neighbor_terrain_vars: Vec<_> = p
+                .neighbors()
+                .into_iter()
+                .flat_map(|n| vars.at(n).and_then(|v| v.terrain))
+                .chain(iter::once(point_terrain))
+                .collect();
+            // Add for all layers, i -> j for i + 1 = j
+            for i in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
+                let j = i + 1;
+                // heights: i -> j
+                // Starts at 0 going down
+                // TERRAIN_SUPPORT_DISTANCE-1 is closest to platforms
+
+                // Add an implication: tile -> disjunction of neighbors below
+                instance.add_lit_impl_clause(
+                    point_terrain[i].pos_lit(),
+                    &neighbor_terrain_vars.iter().map(|v| v[j].pos_lit()).collect_vec(),
+                );
+            }
+
+            // Finally, require the topmost var
+            // TODO: this can be optimized trivially
+            instance.add_unit(point_terrain[0].pos_lit());
+        }
+    }
+
+    vars
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fmt::Debug, fs, hash::Hasher, io::Write, iter, marker::PhantomData, path::Path};
@@ -190,61 +434,6 @@ mod tests {
 
     #[test]
     fn platform_type_graph_print() {
-        // Might be useful to have a typed index? delete if not needed maybe
-        struct TypedIx<T, Ix = DefaultIx>(Ix, PhantomData<T>);
-
-        impl<T, Ix: Clone> Clone for TypedIx<T, Ix> {
-            fn clone(&self) -> Self {
-                Self(self.0.clone(), self.1)
-            }
-        }
-        impl<T, Ix: Copy> Copy for TypedIx<T, Ix> {}
-        impl<T, Ix: Default> Default for TypedIx<T, Ix> {
-            fn default() -> Self {
-                Self(Ix::default(), Default::default())
-            }
-        }
-        impl<T, Ix: Hash> Hash for TypedIx<T, Ix> {
-            fn hash<H: Hasher>(&self, state: &mut H) {
-                self.0.hash(state);
-            }
-        }
-        impl<T, Ix: Ord> Ord for TypedIx<T, Ix> {
-            fn cmp(&self, other: &Self) -> Ordering {
-                self.0.cmp(&other.0)
-            }
-        }
-        impl<T, Ix: PartialOrd> PartialOrd for TypedIx<T, Ix> {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                self.0.partial_cmp(&other.0)
-            }
-        }
-        impl<T, Ix: PartialEq> PartialEq for TypedIx<T, Ix> {
-            fn eq(&self, other: &Self) -> bool {
-                self.0.eq(&other.0)
-            }
-        }
-        impl<T, Ix: Eq> Eq for TypedIx<T, Ix> {}
-        impl<T, Ix: Debug> Debug for TypedIx<T, Ix> {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                write!(f, "TypedIx<{}>({:?})", std::any::type_name::<T>(), self.0)
-            }
-        }
-
-        unsafe impl<Ix: IndexType, T: 'static> IndexType for TypedIx<T, Ix> {
-            fn new(x: usize) -> Self {
-                Self(Ix::new(x), Default::default())
-            }
-
-            fn index(&self) -> usize {
-                self.0.index()
-            }
-
-            fn max() -> Self {
-                Self(<Ix as IndexType>::max(), Default::default())
-            }
-        }
-
         let platform_map = platform_dim_map(&PLATFORMS_DEFAULT);
         let g = dag_by_partial_ord(&platform_map.keys().cloned().collect::<Vec<Dimensions>>());
 
@@ -357,6 +546,61 @@ mod tests {
             );
 
             write!(file, "{}", dot).expect("Failed to write to file.");
+        }
+    }
+
+    #[test]
+    fn encode_test() {
+        let grid = b"\
+            .--.\
+            .-..\
+            ....\
+            --..\
+              "
+        .map(|c| match c as char {
+            '.' => true,
+            _ => false,
+        })
+        .to_vec();
+        let terrain = WorldGrid(Grid::try_from_vec(Dimensions::new(4, 4), grid).unwrap());
+
+        let mut instance = SatInstance::<BasicVarManager>::new();
+        let vars = encode(&PLATFORMS_DEFAULT, &terrain, &mut instance);
+
+        dbg!(&vars);
+        dbg!(&instance);
+
+        for clause in instance.cnf().iter() {
+            let clause_str = clause
+                .iter()
+                .map(|&l| {
+                    vars.var_map
+                        .get(&l.var())
+                        .map(|item| match item {
+                            EncodedItem::Platform { point, dims } => {
+                                format!(
+                                    "{}P{}x{}({};{})",
+                                    if l.is_neg() { "~" } else { "" },
+                                    dims.width,
+                                    dims.height,
+                                    point.x,
+                                    point.y
+                                )
+                            }
+                            EncodedItem::Terrain { point, layer } => {
+                                format!(
+                                    "{}T{}({};{})",
+                                    if l.is_neg() { "~" } else { "" },
+                                    layer,
+                                    point.x,
+                                    point.y
+                                )
+                            }
+                        })
+                        .unwrap_or(format!("{l:?}"))
+                })
+                .join(" | ");
+            println!("{}", clause_str);
         }
     }
 }

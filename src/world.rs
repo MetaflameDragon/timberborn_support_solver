@@ -70,9 +70,9 @@ impl<'de> Visitor<'de> for WorldGridVisitor {
         let max_row_len = rows.iter().map(Vec::len).max().unwrap();
         let dims = Dimensions::new(max_row_len, rows.len());
 
-        let mut grid_vec = vec![false; dims.width as usize * dims.height as usize];
-        for (grid_row, de_row) in grid_vec.chunks_exact_mut(dims.width as usize).zip(rows) {
-            assert_le!(de_row.len(), dims.width as usize);
+        let mut grid_vec = vec![false; dims.width * dims.height];
+        for (grid_row, de_row) in grid_vec.chunks_exact_mut(dims.width).zip(rows) {
+            assert_le!(de_row.len(), dims.width);
             grid_row.copy_from_slice(&de_row);
         }
 
@@ -81,6 +81,11 @@ impl<'de> Visitor<'de> for WorldGridVisitor {
     }
 }
 
+/// WorldGrid can be deserialized from an array of strings,
+/// where `X` and ` ` map to true and false.
+///
+/// The lengths need not be identical, the strings are treated as left-aligned
+/// and undefined tiles default to false.
 impl<'de> Deserialize<'de> for WorldGrid {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

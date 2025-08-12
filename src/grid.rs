@@ -20,8 +20,11 @@ impl<T> Grid<T> {
         self.data.chunks_exact(self.dims.width as usize)
     }
 
-    pub fn from_map(dims: Dimensions, map_fn: impl Fn(Point) -> T) -> Self {
-        Grid { data: dims.iter_within().map(&map_fn).collect(), dims }
+    pub fn from_fn<F>(dims: Dimensions, map_fn: F) -> Self
+    where
+        F: FnMut(Point) -> T,
+    {
+        Grid { data: dims.iter_within().map(map_fn).collect(), dims }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -47,9 +50,7 @@ impl<T> Grid<T> {
     }
 
     fn data_index(&self, point: Point) -> Option<usize> {
-        self.dims
-            .contains(point)
-            .then_some(point.x as usize + (point.y as usize * self.dims.width as usize))
+        self.dims.contains(point).then(|| point.x as usize + (point.y as usize * self.dims.width))
     }
 
     fn index_to_point(&self, index: usize) -> Point {
