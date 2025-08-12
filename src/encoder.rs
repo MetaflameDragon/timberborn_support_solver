@@ -91,11 +91,11 @@ use derive_more::From;
 use enum_map::Enum;
 use itertools::Itertools;
 use petgraph::{
-    adj::{DefaultIx, IndexType},
+    adj::{DefaultIx, IndexType, UnweightedList},
     graph::DiGraph,
     graphmap::NodeTrait,
     prelude::{NodeIndex, *},
-    visit::{IntoEdgeReferences, IntoEdges, IntoNodeIdentifiers},
+    visit::{IntoEdgeReferences, IntoEdges, IntoNodeIdentifiers, IntoNodeReferences},
 };
 use rustsat::{
     instances::{BasicVarManager, Cnf, ManageVars, OptInstance, SatInstance},
@@ -299,8 +299,150 @@ impl EncodingVars {
     pub fn for_dims_at(&self, point: Point, dims: Dimensions) -> Option<Var> {
         self.grid.get(point)?.for_dims(dims)
     }
-    pub fn platform_dims(&self) -> impl Iterator<Item = Dimensions> {
+    pub fn platform_dims(&self) -> impl Iterator<Item = Dimensions> + Clone {
         self.dim_map.keys().cloned().into_iter()
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+enum EncodingNode {
+    Platform(Dimensions),
+    Point(Point),
+}
+
+impl PartialOrd for EncodingNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (EncodingNode::Platform(dims), EncodingNode::Platform(other)) => {
+                dims.partial_cmp(other)
+            }
+            (EncodingNode::Platform(dims), EncodingNode::Point(point)) => {
+                dims.contains(*point).then_some(Ordering::Greater)
+            }
+            (EncodingNode::Point(point), EncodingNode::Platform(dims)) => {
+                dims.contains(*point).then_some(Ordering::Less)
+            }
+            (EncodingNode::Point(a), EncodingNode::Point(b)) => a.eq(b).then_some(Ordering::Equal),
+        }
+    }
+}
+
+enum Toposorted {}
+
+#[derive(Clone, Debug)]
+struct EncodingDag {
+    dag: DiGraph<EncodingNode, (), usize>,
+    closure: UnweightedList<TypedIx<Toposorted>>,
+    reduced: UnweightedList<TypedIx<Toposorted>>,
+    revmap: Vec<TypedIx<Toposorted>>,
+    topo: Vec<NodeIndex<usize>>,
+}
+
+impl EncodingDag {
+    pub fn new(platform_dims: impl Iterator<Item = Dimensions> + Clone) -> Self {
+        let dims_max = platform_dims.clone().fold(Dimensions::new(1, 1), |acc, dims| {
+            Dimensions::new(acc.width.max(dims.width), acc.height.max(dims.height))
+        });
+
+        let mut dag = dag_by_partial_ord(
+            &platform_dims
+                .map(EncodingNode::Platform)
+                .chain(dims_max.iter_within().map(EncodingNode::Point))
+                .collect_vec(),
+        );
+
+        // All points in the maximal rectangle covering all dimensions are tested
+        // Some point nodes may end up without any edges to platform dimensions
+        dag.retain_nodes(|g, n| g.neighbors_undirected(n).next().is_some());
+
+        // Guide:
+        // dag -> topo -> toposorted & revmap -> graph_reduced & graph_closure
+        // topo[graph_reduced index] -> dag index
+        // revmap[dag index] -> graph_reduced index
+        let topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
+        let (dims_toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
+            _,
+            TypedIx<Toposorted>,
+        >(&dag, &topo);
+
+        let (reduced, closure) =
+            petgraph::algo::tred::dag_transitive_reduction_closure(&dims_toposorted);
+
+        Self { dag, reduced, closure, revmap, topo }
+    }
+
+    pub fn iter_edges_reduced(&self) -> impl Iterator<Item = (EncodingNode, EncodingNode)> {
+        self.reduced.edge_references().map(|e| {
+            (self.dag[self.topo[e.source().index()]], self.dag[self.topo[e.target().index()]])
+        })
+    }
+
+    pub fn iter_platform_edges_reduced(&self) -> impl Iterator<Item = (Dimensions, Dimensions)> {
+        self.iter_edges_reduced().filter_map(|pair| match pair {
+            (EncodingNode::Platform(source), EncodingNode::Platform(target)) => {
+                Some((source, target))
+            }
+            _ => None,
+        })
+    }
+
+    pub fn iter_point_platform_edges_reduced(&self) -> impl Iterator<Item = (Point, Dimensions)> {
+        self.iter_edges_reduced().filter_map(|pair| match pair {
+            (EncodingNode::Point(source), EncodingNode::Platform(target)) => Some((source, target)),
+            _ => None,
+        })
+    }
+
+    pub fn iter_platform_targets_by_source(
+        &self,
+    ) -> impl Iterator<Item = Vec<(TypedIx<Toposorted>, Dimensions)>> {
+        self.dag
+            .node_references()
+            .filter_map(|(ix, n)| match n {
+                EncodingNode::Platform(dims) => Some((ix, *dims)),
+                _ => None,
+            })
+            .map(|(ix, dims)| {
+                self.reduced
+                    .edges(self.revmap[ix.index()])
+                    .map(|e| e.target())
+                    .map(|ix| match self.dag[self.topo[ix.index()]] {
+                        EncodingNode::Platform(dims) => (ix, dims),
+                        _ => {
+                            unreachable!(
+                                "out-edges from platform nodes are expected to always be platforms"
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+    }
+
+    pub fn common_platform_successors(
+        &self,
+        a: TypedIx<Toposorted>,
+        b: TypedIx<Toposorted>,
+    ) -> Vec<(TypedIx<Toposorted>, Dimensions)> {
+        self.closure
+            .edges(a)
+            .filter_map(|e| {
+                if self.closure.contains_edge(b, e.target())
+                    && let EncodingNode::Platform(dims) = self.dag[self.topo[e.target().index()]]
+                {
+                    Some((e.target(), dims))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn maximal_from(&self, indices: &[TypedIx<Toposorted>]) -> Vec<TypedIx<Toposorted>> {
+        indices
+            .into_iter()
+            .copied()
+            .filter(|n| !indices.iter().any(|m| self.closure.contains_edge(*m, *n)))
+            .collect()
     }
 }
 
@@ -311,125 +453,41 @@ pub fn encode(
 ) -> EncodingVars {
     let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
 
-    #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-    enum Node {
-        Dimensions(Dimensions),
-        Point(Point),
-    }
-
-    impl PartialOrd for Node {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            match (self, other) {
-                (Node::Dimensions(dims), Node::Dimensions(other)) => dims.partial_cmp(other),
-                (Node::Dimensions(dims), Node::Point(point)) => {
-                    dims.contains(*point).then_some(Ordering::Greater)
-                }
-                (Node::Point(point), Node::Dimensions(dims)) => {
-                    dims.contains(*point).then_some(Ordering::Less)
-                }
-                (Node::Point(a), Node::Point(b)) => a.eq(b).then_some(Ordering::Equal),
-            }
-        }
-    }
-
-    // TODO: Probably split this into dimensions-only DAG & Point-dims DAG
-    // The dims-only DAG would be reduced as usual, but the point-dims DAG
-    // might benefit from only keeping point-dims edges
-    // Would help clean up a lot of stuff below
-    let dag = {
-        let dims_max = vars.platform_dims().fold(Dimensions::new(1, 1), |acc, dims| {
-            Dimensions::new(acc.width.max(dims.width), acc.height.max(dims.height))
-        });
-
-        let mut dag = dag_by_partial_ord(
-            &vars
-                .platform_dims()
-                .map(Node::Dimensions)
-                .chain(dims_max.iter_within().map(Node::Point))
-                .collect_vec(),
-        );
-
-        // All points in the maximal rectangle covering all dimensions are tested
-        // Some point nodes may end up without any edges to platform dimensions
-        dag.retain_nodes(|g, n| g.neighbors_undirected(n).next().is_some());
-
-        dag
-    };
+    let dag = EncodingDag::new(vars.platform_dims());
     dbg!(&dag);
-
-    // Guide:
-    // dag -> topo -> toposorted & revmap -> graph_reduced & graph_closure
-    // topo[graph_reduced index] -> dag index
-    // revmap[dag index] -> graph_reduced index
-    enum Toposorted {};
-    let dims_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
-    let (dims_toposorted, dims_revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
-        _,
-        TypedIx<Toposorted>,
-    >(&dag, &dims_topo);
-
-    let (dims_graph_reduced, dims_graph_closure) =
-        petgraph::algo::tred::dag_transitive_reduction_closure(&dims_toposorted);
 
     for p in terrain.dims().iter_within() {
         let current_vars = vars.at(p).unwrap();
 
         // ===== Platform selection DAG =====
-        for edge in dims_graph_reduced.edge_references() {
+        for (smaller, larger) in dag.iter_platform_edges_reduced() {
             // The DAG has nodes ordered as smaller -> larger
             // This means that 1x1 has no in-edges, and the largest platforms have no
             // out-edges We want the implications encoded as smaller <- larger
-            let (dag_source, dag_target) =
-                (dims_topo[edge.source().index()], dims_topo[edge.target().index()]);
-
-            let (Node::Dimensions(dims_target), Node::Dimensions(dims_source)) =
-                (dag[dag_target], dag[dag_source])
-            else {
-                continue;
-            };
             instance.add_lit_impl_lit(
-                current_vars.for_dims(dims_target).unwrap().pos_lit(),
-                current_vars.for_dims(dims_source).unwrap().pos_lit(),
+                current_vars.for_dims(larger).unwrap().pos_lit(),
+                current_vars.for_dims(smaller).unwrap().pos_lit(),
             );
         }
 
-        // HACK: Might need cleaning up, a lot of stuff is not properly documented
-        for (a, b) in dims_graph_reduced
-            .node_identifiers()
-            .filter(|n| matches!(dag[dims_topo[n.index()]], Node::Dimensions(_)))
-            .flat_map(|i| {
-                dims_graph_reduced
-                    .edges(i)
-                    .map(|e| e.target())
-                    .combinations(2)
-                    .map(|combo| (combo[0], combo[1]))
-            })
+        for ((ix_a, dims_a), (ix_b, dims_b)) in dag
+            .iter_platform_targets_by_source()
+            .flat_map(|targets| Itertools::tuple_combinations(targets.into_iter()))
         {
             // All nodes `n` such that `a ->+ n` and `b ->+ n`
-            let common_successors: Vec<_> = dims_graph_closure
-                .edges(a)
-                .filter_map(|e| {
-                    dims_graph_closure.contains_edge(b, e.target()).then_some(e.target())
-                })
-                .collect();
-            // Filters out nodes `n` for `m ->* n`
-            let common_successors_maximal: Vec<_> = common_successors
-                .iter()
-                .filter(|n| {
-                    !common_successors.iter().any(|m| dims_graph_closure.contains_edge(*m, **n))
-                })
-                .collect();
+            // Then filters out nodes `n` for `m ->* n`
+            let common_successors = dag.common_platform_successors(ix_a, ix_b);
+            let common_successors_maximal_ixs: Vec<_> =
+                dag.maximal_from(&common_successors.iter().map(|(ix, _)| *ix).collect_vec());
+            let common_successors_maximal = common_successors.iter().filter_map(|(ix, dims)| {
+                common_successors_maximal_ixs.contains(ix).then_some(*dims)
+            });
             // Result: pairs `a`, `b` and an associated set C, where:
             // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
             // `->+`: transitive successor (1 or more edges)
             // `!->+`: not a transitive successor
 
             // (~a | ~b | i), or also (a & b) -> i
-            let (Node::Dimensions(dims_a), Node::Dimensions(dims_b)) =
-                (dag[dims_topo[a.index()]], dag[dims_topo[b.index()]])
-            else {
-                unreachable!()
-            };
             instance.add_cube_impl_clause(
                 &[
                     current_vars.for_dims(dims_a).unwrap().pos_lit(),
@@ -437,27 +495,14 @@ pub fn encode(
                 ],
                 &common_successors_maximal
                     .into_iter()
-                    .map(|i| {
-                        current_vars
-                            .for_dims(match dag[dims_topo[i.index()]] {
-                                Node::Dimensions(dims) => dims,
-                                _ => unreachable!(),
-                            })
-                            .unwrap()
-                            .pos_lit()
-                    })
+                    .map(|dims| current_vars.for_dims(dims).unwrap().pos_lit())
                     .collect_vec(),
             );
         }
 
         // ===== Platform-terrain clauses =====
 
-        for (point, dims) in dims_graph_reduced.edge_references().filter_map(|e| {
-            match (dag[dims_topo[e.source().index()]], dag[dims_topo[e.target().index()]]) {
-                (Node::Point(p), Node::Dimensions(d)) => Some((p, d)),
-                _ => None,
-            }
-        }) {
+        for (point, dims) in dag.iter_point_platform_edges_reduced() {
             if let Some(point_var) =
                 vars.at(p + point).and_then(|v| v.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]))
             {
