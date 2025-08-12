@@ -542,6 +542,8 @@ pub fn encode(
         }
 
         // ===== Platform overlap =====
+
+        // TODO
     }
 
     vars
