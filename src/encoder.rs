@@ -311,7 +311,51 @@ pub fn encode(
 ) -> EncodingVars {
     let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
 
-    let dag = dag_by_partial_ord(&vars.platform_dims().collect_vec());
+    #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+    enum Node {
+        Dimensions(Dimensions),
+        Point(Point),
+    }
+
+    impl PartialOrd for Node {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            match (self, other) {
+                (Node::Dimensions(dims), Node::Dimensions(other)) => dims.partial_cmp(other),
+                (Node::Dimensions(dims), Node::Point(point)) => {
+                    dims.contains(*point).then_some(Ordering::Greater)
+                }
+                (Node::Point(point), Node::Dimensions(dims)) => {
+                    dims.contains(*point).then_some(Ordering::Less)
+                }
+                (Node::Point(a), Node::Point(b)) => a.eq(b).then_some(Ordering::Equal),
+            }
+        }
+    }
+
+    // TODO: Probably split this into dimensions-only DAG & Point-dims DAG
+    // The dims-only DAG would be reduced as usual, but the point-dims DAG
+    // might benefit from only keeping point-dims edges
+    // Would help clean up a lot of stuff below
+    let dag = {
+        let dims_max = vars.platform_dims().fold(Dimensions::new(1, 1), |acc, dims| {
+            Dimensions::new(acc.width.max(dims.width), acc.height.max(dims.height))
+        });
+
+        let mut dag = dag_by_partial_ord(
+            &vars
+                .platform_dims()
+                .map(Node::Dimensions)
+                .chain(dims_max.iter_within().map(Node::Point))
+                .collect_vec(),
+        );
+
+        // All points in the maximal rectangle covering all dimensions are tested
+        // Some point nodes may end up without any edges to platform dimensions
+        dag.retain_nodes(|g, n| g.neighbors_undirected(n).next().is_some());
+
+        dag
+    };
+    dbg!(&dag);
 
     // Guide:
     // dag -> topo -> toposorted & revmap -> graph_reduced & graph_closure
@@ -328,7 +372,7 @@ pub fn encode(
         petgraph::algo::tred::dag_transitive_reduction_closure(&dims_toposorted);
 
     for p in terrain.dims().iter_within() {
-        let point_vars = vars.at(p).unwrap();
+        let current_vars = vars.at(p).unwrap();
 
         // ===== Platform selection DAG =====
         for edge in dims_graph_reduced.edge_references() {
@@ -338,19 +382,29 @@ pub fn encode(
             let (dag_source, dag_target) =
                 (dims_topo[edge.source().index()], dims_topo[edge.target().index()]);
 
+            let (Node::Dimensions(dims_target), Node::Dimensions(dims_source)) =
+                (dag[dag_target], dag[dag_source])
+            else {
+                continue;
+            };
             instance.add_lit_impl_lit(
-                point_vars.for_dims(dag[dag_target]).unwrap().pos_lit(),
-                point_vars.for_dims(dag[dag_source]).unwrap().pos_lit(),
+                current_vars.for_dims(dims_target).unwrap().pos_lit(),
+                current_vars.for_dims(dims_source).unwrap().pos_lit(),
             );
         }
 
-        for (a, b) in dims_graph_reduced.node_identifiers().flat_map(|i| {
-            dims_graph_reduced
-                .edges(i)
-                .map(|e| e.target())
-                .combinations(2)
-                .map(|combo| (combo[0], combo[1]))
-        }) {
+        // HACK: Might need cleaning up, a lot of stuff is not properly documented
+        for (a, b) in dims_graph_reduced
+            .node_identifiers()
+            .filter(|n| matches!(dag[dims_topo[n.index()]], Node::Dimensions(_)))
+            .flat_map(|i| {
+                dims_graph_reduced
+                    .edges(i)
+                    .map(|e| e.target())
+                    .combinations(2)
+                    .map(|combo| (combo[0], combo[1]))
+            })
+        {
             // All nodes `n` such that `a ->+ n` and `b ->+ n`
             let common_successors: Vec<_> = dims_graph_closure
                 .edges(a)
@@ -371,21 +425,51 @@ pub fn encode(
             // `!->+`: not a transitive successor
 
             // (~a | ~b | i), or also (a & b) -> i
+            let (Node::Dimensions(dims_a), Node::Dimensions(dims_b)) =
+                (dag[dims_topo[a.index()]], dag[dims_topo[b.index()]])
+            else {
+                unreachable!()
+            };
             instance.add_cube_impl_clause(
                 &[
-                    point_vars.for_dims(dag[dims_topo[a.index()]]).unwrap().pos_lit(),
-                    point_vars.for_dims(dag[dims_topo[b.index()]]).unwrap().pos_lit(),
+                    current_vars.for_dims(dims_a).unwrap().pos_lit(),
+                    current_vars.for_dims(dims_b).unwrap().pos_lit(),
                 ],
                 &common_successors_maximal
                     .into_iter()
-                    .map(|i| point_vars.for_dims(dag[dims_topo[i.index()]]).unwrap().pos_lit())
+                    .map(|i| {
+                        current_vars
+                            .for_dims(match dag[dims_topo[i.index()]] {
+                                Node::Dimensions(dims) => dims,
+                                _ => unreachable!(),
+                            })
+                            .unwrap()
+                            .pos_lit()
+                    })
                     .collect_vec(),
             );
         }
 
+        // ===== Platform-terrain clauses =====
+
+        for (point, dims) in dims_graph_reduced.edge_references().filter_map(|e| {
+            match (dag[dims_topo[e.source().index()]], dag[dims_topo[e.target().index()]]) {
+                (Node::Point(p), Node::Dimensions(d)) => Some((p, d)),
+                _ => None,
+            }
+        }) {
+            if let Some(point_var) =
+                vars.at(p + point).and_then(|v| v.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]))
+            {
+                // Point -> platform
+                instance
+                    .add_lit_impl_lit(point_var.pos_lit(), current_vars.platforms[&dims].pos_lit())
+            }
+        }
+
         // ===== Terrain support =====
 
-        if let Some(point_terrain) = point_vars.terrain {
+        if let Some(point_terrain) = current_vars.terrain {
             // For the current tile, get all neighbors
             let neighbor_terrain_vars: Vec<_> = p
                 .neighbors()
@@ -411,6 +495,8 @@ pub fn encode(
             // TODO: this can be optimized trivially
             instance.add_unit(point_terrain[0].pos_lit());
         }
+
+        // ===== Platform overlap =====
     }
 
     vars
