@@ -15,7 +15,7 @@ use derive_more::{Deref, DerefMut};
 use enum_iterator::Sequence;
 use enum_map::EnumMap;
 use futures::{FutureExt, SinkExt, Stream, StreamExt, TryFutureExt};
-use log::info;
+use log::{info, trace};
 use new_zealand::nz;
 use rustsat::{
     encodings::{card, card::Totalizer},
@@ -137,7 +137,7 @@ impl SolverConfig {
         if let (platform_type, Some(&limit)) =
             (PLATFORMS_DEFAULT[0], cfg.limits().get(&PLATFORMS_DEFAULT[0]))
         {
-            info!("Limiting {} platforms to n <= {}", platform_type, limit);
+            println!("Limiting {} platforms to n <= {}", platform_type, limit);
             let upper_constraint = CardConstraint::new_ub(
                 vars.iter_dims_vars(platform_type.dims()).unwrap().map(|var| var.pos_lit()),
                 limit,
@@ -464,7 +464,6 @@ impl Solution {
             .iter()
             .filter_map(|lit| Some((lit, lit.is_pos().then(|| vars.var_to_platform(lit.var()))??)))
         {
-            info!("Active literal: {}", vars.lit_readable_name(lit).unwrap_or(format!("{lit:?}")));
             platforms
                 .entry(plat.point())
                 .and_modify(|previous: &mut Platform| {
@@ -474,7 +473,12 @@ impl Solution {
                     }
                 })
                 .or_insert(plat);
-            info!("=> {plat:?}");
+
+            trace!(
+                target: "solution_lit",
+                "Active literal: {}", vars.lit_readable_name(lit).unwrap_or(format!("{lit:?}"))
+            );
+            trace!(target: "solution_lit", "=> {plat:?}");
         }
 
         // for (&p, &var) in &variables.platforms_1x1 {

@@ -20,7 +20,7 @@ use clap::{
     builder::{TypedValueParser, ValueParserFactory},
     value_parser,
 };
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use rustsat::solvers::InterruptSolver;
 use serde::Deserialize;
 use thiserror::Error;
@@ -198,7 +198,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         if let Some(LoadedProject { project: _project, path }) = &state.loaded_project {
             // Try to show just the file name, fall back to the whole path
             let proj_path_str = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
-            info!("Currently loaded project: {}", proj_path_str);
+            println!("Currently loaded project: {}", proj_path_str);
         };
 
         let cli = match parse_repl() {
@@ -227,7 +227,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         match cmd {
             ReplCommand::Load { path } => {
                 state.loaded_project = Some(LoadedProject { project: load_project(&path)?, path });
-                info!("Loaded");
+                println!("Loaded");
 
                 Ok(())
             }
@@ -238,7 +238,7 @@ async fn repl_loop() -> anyhow::Result<()> {
 
                 state.loaded_project =
                     Some(LoadedProject { project: load_project(&path)?, path: path.clone() });
-                info!("Loaded");
+                println!("Loaded");
 
                 Ok(())
             }
@@ -267,7 +267,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 if let Err(err) = res {
                     bail!("Error while solving: {}", err.to_string());
                 }
-                info!("Done");
+                println!("Done");
 
                 Ok(())
             }
@@ -307,7 +307,7 @@ async fn run_solver(
         tokio::spawn({
             let cancel = ctrl_c_cancellation.clone();
             async move {
-                info!("Interrupt listener ready");
+                trace!(target: "solver_interrupter", "Interrupt listener ready");
                 // TODO: better ctrl-c/interrupt handling
                 // Example: on unix, this listener will continue to capture SIGINT even after
                 // going out of scope, which might eat further SIGINTs if the program gets stuck
@@ -318,10 +318,10 @@ async fn run_solver(
 
                 match tokio::signal::ctrl_c().with_cancellation_token_owned(cancel).await {
                     None => {
-                        info!("Interrupt listener canceled");
+                        trace!(target: "solver_interrupter", "Interrupt listener canceled");
                     }
                     Some(Ok(())) => {
-                        info!("Calling interrupt");
+                        println!("Aborting...");
                         interrupter.interrupt();
                     }
                     Some(Err(err)) => {
@@ -335,17 +335,17 @@ async fn run_solver(
         let sol = match solver_future.future().await? {
             SolverResponse::Sat(sol) => sol,
             SolverResponse::Unsat => {
-                info!("No solution found for the current constraints");
+                println!("No solution found for the current constraints");
                 return Ok(());
             }
             SolverResponse::Aborted => {
-                info!("Aborted");
+                println!("Solver aborted");
                 return Ok(());
             }
         };
 
         if sol.platform_count() == 0 {
-            info!("Found a solution with no platforms - aborting");
+            println!("Found a solution with no platforms - aborting");
             return Ok(());
         }
         // assert_gt!(sol.platform_count(), 0, "Solution should have at least one
@@ -353,10 +353,10 @@ async fn run_solver(
         run_config.limits_mut().entry(PLATFORMS_DEFAULT[0]).insert_entry(sol.platform_count() - 1);
         // todo!();
 
-        info!("Solution found ({} platforms total)", sol.platform_count());
+        println!("Solution found ({} platforms total)", sol.platform_count());
         let platform_stats = sol.platform_stats();
-        for (ty, count) in platform_stats.iter() {
-            info!("{}: {}", ty.dimensions_str(), count);
+        for (def, count) in platform_stats.iter() {
+            println!("{}: {}", def.dimensions_str(), count);
         }
         print_world(&project.world, Some(&sol));
     }

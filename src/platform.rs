@@ -65,11 +65,12 @@ impl Display for PlatformDef {
 pub struct Platform {
     point: Point,
     def: PlatformDef,
+    rotated: bool,
 }
 
 impl Platform {
-    pub fn new(point: Point, def: PlatformDef) -> Self {
-        Self { point, def }
+    pub fn new(point: Point, def: PlatformDef, rotated: bool) -> Self {
+        Self { point, def, rotated }
     }
 
     /// Two corners of the area this platform covers (relative to this
@@ -80,7 +81,7 @@ impl Platform {
     /// This is better than referring to a platform's inner `point` directly,
     /// since the point may be placed arbitrarily.
     pub fn area_corners(&self) -> Option<(Point, Point)> {
-        Some((self.point, self.def.dims().corner_point_incl()? + self.point))
+        Some((self.point, self.dims().corner_point_incl()? + self.point))
     }
 
     pub fn overlaps(&self, other: &Self) -> bool {
@@ -96,7 +97,23 @@ impl Platform {
             && other_near.y <= self_far.y
     }
 
-    pub fn platform_def(&self) -> PlatformDef {
+    /// The top-left (min-xy) point of this platform.
+    pub fn point(&self) -> Point {
+        self.point
+    }
+
+    pub fn rotated(&self) -> bool {
+        self.rotated
+    }
+
+    /// Platform dimensions, taking rotation into account.
+    ///
+    /// Use `.def().dims()` to get the raw definition dimensions.
+    pub fn dims(&self) -> Dimensions {
+        if self.rotated() { self.def.dims().flipped() } else { self.def.dims() }
+    }
+
+    pub fn def(&self) -> PlatformDef {
         self.def
     }
 }
