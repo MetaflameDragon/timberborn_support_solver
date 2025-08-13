@@ -29,13 +29,14 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    platform::{Platform, PlatformDef},
+    encoder::EncodingVars,
+    platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
     point::Point,
     world::World,
 };
 
 pub mod dimensions;
-mod encoder;
+pub mod encoder;
 pub mod grid;
 pub mod platform;
 pub mod point;
@@ -45,7 +46,7 @@ pub mod world;
 const TERRAIN_SUPPORT_DISTANCE: usize = 4;
 
 pub struct SolverConfig {
-    vars: Variables,
+    vars: EncodingVars,
     instance: SatInstance,
 }
 
@@ -55,10 +56,6 @@ pub struct SolverRunConfig {
 }
 
 impl SolverRunConfig {
-    /// The maximum number of platforms for the solution.
-    ///
-    /// This is the limit for 1x1 platforms, since they are the "superplatform"
-    /// of all other types (as in superset or superclass).
     pub fn max_platforms(&self) -> Option<usize> {
         todo!()
         // self.limits.get(&PlatformDef::Square1x1).copied()
@@ -94,12 +91,12 @@ pub enum SolverResponse {
 impl SolverConfig {
     pub fn new(world: &World) -> SolverConfig {
         let mut instance: SatInstance<BasicVarManager> = SatInstance::new();
-        let vars: Variables = encode_world_constraints(world, &mut instance);
+        let vars = encoder::encode(&PLATFORMS_DEFAULT, world.grid(), &mut instance);
 
         SolverConfig { vars, instance }
     }
 
-    pub fn vars(&self) -> &Variables {
+    pub fn vars(&self) -> &EncodingVars {
         &self.vars
     }
 
@@ -114,15 +111,35 @@ impl SolverConfig {
         sat_solver.add_cnf(cnf).context("Failed to add CNF")?;
 
         for (&platform_type, &limit) in cfg.limits().iter() {
+            // TODO: Actually encode limits for other platforms
             // TODO: Clarify what the encoding means
-            // The cardinality constraints still work in terms of "platform promotion",
-            // where smaller platforms "promote" to larger ones, and the vars for
-            // larger ones imply all their predecessors.
-            // This means that limiting 5x5 to <= 2 and 3x3 to <= 4 actually means
-            // "at most 4 of 3x3 or larger, and at most 2 of 5x5".
+            // The cardinality constraints still work in terms of "platform
+            // promotion", where smaller platforms "promote" to
+            // larger ones, and the vars for larger ones imply all
+            // their predecessors. This means that limiting 5x5 to
+            // <= 2 and 3x3 to <= 4 actually means "at most 4 of 3x3
+            // or larger, and at most 2 of 5x5". info!("Limiting {}
+            // platforms to n <= {}", platform_type, limit);
+            // let upper_constraint = CardConstraint::new_ub(
+            //     vars.platform_vars_map(platform_type).values().map(|var|
+            // var.pos_lit()),     limit,
+            // );
+            //
+            // card::encode_cardinality_constraint::<Totalizer, _>(
+            //     upper_constraint,
+            //     &mut sat_solver,
+            //     &mut var_manager,
+            // )
+            // .context("failed to encode cardinality constraint")?;
+        }
+
+        // TODO: Temporary 1x1-only limiter
+        if let (platform_type, Some(&limit)) =
+            (PLATFORMS_DEFAULT[0], cfg.limits().get(&PLATFORMS_DEFAULT[0]))
+        {
             info!("Limiting {} platforms to n <= {}", platform_type, limit);
             let upper_constraint = CardConstraint::new_ub(
-                vars.platform_vars_map(platform_type).values().map(|var| var.pos_lit()),
+                vars.iter_dims_vars(platform_type.dims()).unwrap().map(|var| var.pos_lit()),
                 limit,
             );
 
@@ -439,10 +456,14 @@ pub struct Solution {
 }
 
 impl Solution {
-    pub fn from_assignment(assignment: &Assignment, variables: &Variables) -> Self {
+    pub fn from_assignment(assignment: &Assignment, vars: &EncodingVars) -> Self {
         let mut platforms = HashMap::new();
 
-        todo!();
+        // iter() already goes over positive literals
+        for (point, dims) in assignment.iter().filter_map(|lit| vars.var_to_platform(lit.var())) {
+            platforms.insert(point, *vars.dims_platform_map()[&dims].iter().next().unwrap());
+        }
+
         // for (&p, &var) in &variables.platforms_1x1 {
         //     if assignment.var_value(var).to_bool_with_def(false) {
         //         platforms.insert(p, PlatformDef::Square1x1);

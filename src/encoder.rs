@@ -206,7 +206,7 @@ unsafe impl<Ix: IndexType, T: 'static> IndexType for TypedIx<T, Ix> {
 }
 
 /// Maps dimensions to platform definitions, including rotated variants.
-pub fn platform_dim_map(
+pub fn dims_platform_map(
     platform_defs: &[PlatformDef],
 ) -> HashMap<Dimensions, HashSet<PlatformDef>> {
     let mut map: HashMap<_, HashSet<PlatformDef>> = HashMap::new();
@@ -245,13 +245,13 @@ where
 
 #[derive(Clone, Debug)]
 struct EncodingTileVars {
-    platforms: HashMap<Dimensions, Var>,
+    dims_vars: HashMap<Dimensions, Var>,
     terrain: Option<[Var; TERRAIN_SUPPORT_DISTANCE]>,
 }
 
 impl EncodingTileVars {
     pub fn for_dims(&self, dims: Dimensions) -> Option<Var> {
-        self.platforms.get(&dims).cloned()
+        self.dims_vars.get(&dims).cloned()
     }
 }
 
@@ -262,7 +262,7 @@ enum EncodedItem {
 }
 
 #[derive(Clone, Debug)]
-struct EncodingVars {
+pub struct EncodingVars {
     dim_map: HashMap<Dimensions, HashSet<PlatformDef>>,
     grid: Grid<EncodingTileVars>,
     var_map: HashMap<Var, EncodedItem>,
@@ -274,16 +274,16 @@ impl EncodingVars {
         terrain: &WorldGrid,
         var_man: &mut BasicVarManager,
     ) -> Self {
-        let dim_map = platform_dim_map(platform_defs);
+        let dim_map = dims_platform_map(platform_defs);
 
         let dim_keys: Vec<_> = dim_map.keys().cloned().collect();
         let grid = Grid::from_fn(terrain.dims(), |p| EncodingTileVars {
-            platforms: dim_keys.iter().cloned().map(|k| (k, var_man.new_var())).collect(),
+            dims_vars: dim_keys.iter().cloned().map(|k| (k, var_man.new_var())).collect(),
             terrain: terrain.get(p).unwrap().then_some(std::array::from_fn(|_| var_man.new_var())),
         });
         let mut var_map = HashMap::new();
         for (point, vars) in grid.enumerate() {
-            for (&dims, &var) in vars.platforms.iter() {
+            for (&dims, &var) in vars.dims_vars.iter() {
                 var_map.insert(var, EncodedItem::Platform { point, dims });
             }
             for (layer, var) in vars.terrain.iter().flatten().enumerate() {
@@ -302,10 +302,34 @@ impl EncodingVars {
     pub fn platform_dims(&self) -> impl Iterator<Item = Dimensions> + Clone {
         self.dim_map.keys().cloned().into_iter()
     }
+
+    pub fn iter_dims_vars(&self, dims: Dimensions) -> Option<impl Iterator<Item = Var>> {
+        self.dim_map
+            .contains_key(&dims)
+            .then_some(self.grid.iter().map(move |vars| vars.dims_vars[&dims]))
+    }
+
+    pub fn var_map(&self) -> &HashMap<Var, EncodedItem> {
+        &self.var_map
+    }
+
+    pub fn dims_platform_map(&self) -> &HashMap<Dimensions, HashSet<PlatformDef>> {
+        &self.dim_map
+    }
+
+    pub fn var_to_platform(&self, var: Var) -> Option<(Point, Dimensions)> {
+        self.var_map.get(&var).and_then(|item| {
+            if let EncodedItem::Platform { point, dims } = item {
+                Some((*point, *dims))
+            } else {
+                None
+            }
+        })
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-enum EncodingNode {
+pub enum EncodingNode {
     Platform(Dimensions),
     Point(Point),
 }
@@ -508,7 +532,7 @@ pub fn encode(
             {
                 // Point -> platform
                 instance
-                    .add_lit_impl_lit(point_var.pos_lit(), current_vars.platforms[&dims].pos_lit())
+                    .add_lit_impl_lit(point_var.pos_lit(), current_vars.dims_vars[&dims].pos_lit())
             }
         }
 
@@ -567,7 +591,7 @@ mod tests {
 
     #[test]
     fn platform_type_graph_print() {
-        let platform_map = platform_dim_map(&PLATFORMS_DEFAULT);
+        let platform_map = dims_platform_map(&PLATFORMS_DEFAULT);
         let g = dag_by_partial_ord(&platform_map.keys().cloned().collect::<Vec<Dimensions>>());
 
         use petgraph::visit::NodeRef;

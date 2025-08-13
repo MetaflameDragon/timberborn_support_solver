@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsStr,
     fs,
     fs::File,
@@ -28,7 +28,7 @@ use timberborn_support_solver::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
     dimensions::Dimensions,
     grid::Grid,
-    platform::{Platform, PlatformDef},
+    platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
     point::Point,
     utils::loop_with_feedback,
     world::{World, WorldGrid},
@@ -84,25 +84,34 @@ enum ReplCommand {
 enum PlatformLimitError {
     #[error("duplicate limit for `{0}`")]
     Duplicate(PlatformDef),
+    #[error("no platform with dimensions `{w}x{h}` found", w = .0.width, h = .0.height)]
+    Unknown(Dimensions),
 }
 
 fn try_into_platform_limits(
     limit_args: Vec<PlatformLimitArg>,
+    dims_platform_map: &HashMap<Dimensions, PlatformDef>,
 ) -> Result<PlatformLimits, PlatformLimitError> {
     let mut map = HashMap::new();
-    for PlatformLimitArg(ty, count) in limit_args.into_iter() {
-        if map.insert(ty, count).is_some() {
+    for PlatformLimitArg(dims, count) in limit_args.into_iter() {
+        let def = *dims_platform_map.get(&dims).ok_or(PlatformLimitError::Unknown(dims))?;
+
+        if map.insert(def, count).is_some() {
             // Duplicate value
             // Maybe needs a better error type? it's just one error path for now though
-            return Err(PlatformLimitError::Duplicate(ty));
+            return Err(PlatformLimitError::Duplicate(def));
         }
     }
 
     Ok(PlatformLimits::new(map))
 }
 
+/// Note: describes limits for _dimensions_, not the platform defs themselves.
+/// Platform defs are uniquely identified by their dimensions in the solver, and
+/// the CLI accepts dimensions rather than particular platform defs, so this
+/// mapping has to be resolved after parsing.
 #[derive(Clone, Debug)]
-struct PlatformLimitArg(PlatformDef, usize);
+struct PlatformLimitArg(Dimensions, usize);
 
 #[derive(Error, Debug)]
 enum PlatformLimitArgParseError {
@@ -120,16 +129,21 @@ impl FromStr for PlatformLimitArg {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use PlatformLimitArgParseError as Error;
         let (key, value) = s.split_once(':').ok_or(Error::MissingDelimiter)?;
-        let r#type = /*match key.trim() {
-            "5" => PlatformDef::Square5x5,
-            "3" => PlatformDef::Square3x3,
-            "1" => PlatformDef::Square1x1,
-            other => return Err(Error::InvalidType(other.to_string())),
-        };*/ todo!();
+        let dims = if let Some((a, b)) = key.split_once('x') {
+            // Try (a)x(b)
+            Dimensions::new(
+                a.parse().map_err(Error::InvalidValue)?,
+                b.parse().map_err(Error::InvalidValue)?,
+            )
+        } else {
+            // Assume (a)x(a)
+            let size: usize = key.parse().map_err(Error::InvalidValue)?;
+            Dimensions::new(size, size)
+        };
 
-        let count: usize = value.trim().parse().map_err(|err| Error::InvalidValue(err))?;
+        let count: usize = value.trim().parse().map_err(Error::InvalidValue)?;
 
-        Ok(PlatformLimitArg(r#type, count))
+        Ok(PlatformLimitArg(dims, count))
     }
 }
 
@@ -163,13 +177,22 @@ async fn repl_loop() -> anyhow::Result<()> {
 
     struct State {
         loaded_project: Option<LoadedProject>,
+        dims_platform_map: HashMap<Dimensions, PlatformDef>,
     }
 
     struct LoadedProject {
         project: Project,
         path: PathBuf,
     }
-    let mut state = State { loaded_project: None };
+
+    let dims_platform_map: HashMap<Dimensions, PlatformDef> = {
+        timberborn_support_solver::encoder::dims_platform_map(&PLATFORMS_DEFAULT)
+            .into_iter()
+            .map(|(k, v)| (k, *v.iter().next().unwrap()))
+            .collect()
+    };
+
+    let mut state = State { loaded_project: None, dims_platform_map };
 
     loop {
         if let Some(LoadedProject { project: _project, path }) = &state.loaded_project {
@@ -229,7 +252,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 Ok(())
             }
             ReplCommand::Solve { limits } => {
-                let limits = try_into_platform_limits(limits)?;
+                let limits = try_into_platform_limits(limits, &state.dims_platform_map)?;
                 let Some(LoadedProject { project, .. }) = &state.loaded_project else {
                     bail!("No project loaded");
                 };
@@ -327,9 +350,8 @@ async fn run_solver(
         }
         // assert_gt!(sol.platform_count(), 0, "Solution should have at least one
         // platform");
-        // run_config.limits_mut().insert(PlatformDef::Square1x1, sol.platform_count() -
-        // 1);
-        todo!();
+        run_config.limits_mut().entry(PLATFORMS_DEFAULT[0]).insert_entry(sol.platform_count() - 1);
+        // todo!();
 
         info!("Solution found ({} platforms total)", sol.platform_count());
         let platform_stats = sol.platform_stats();
@@ -375,23 +397,17 @@ fn print_world(world: &World, solution: Option<&Solution>) {
     if let Some(solution) = solution {
         for (point, platform) in solution.platforms() {
             let platform = Platform::new(*point, *platform);
-            todo!();
-            // let (lower, upper) = platform.area_corners();
+            let (lower, upper) = platform.area_corners().unwrap();
             //
-            // let fill = match platform.platform_def() {
-            //     PlatformDef::Square1x1 => '1',
-            //     PlatformDef::Square3x3 => '3',
-            //     PlatformDef::Square5x5 => '5',
-            //     _ => todo!(),
-            // };
+            let fill = '+';
             //
-            // for y in lower.y..=upper.y {
-            //     for x in lower.x..=upper.x {
-            //         let q = Point::new(x, y);
-            //         // Pass if out of bounds
-            //         _ = char_grid.set(q, fill);
-            //     }
-            // }
+            for y in lower.y..=upper.y {
+                for x in lower.x..=upper.x {
+                    let q = Point::new(x, y);
+                    // Pass if out of bounds
+                    _ = char_grid.set(q, fill);
+                }
+            }
         }
     }
 
