@@ -99,7 +99,7 @@ use petgraph::{
 };
 use rustsat::{
     instances::{BasicVarManager, Cnf, ManageVars, OptInstance, SatInstance},
-    types::{Clause, Var},
+    types::{Clause, Lit, Var},
 };
 
 use crate::{
@@ -326,6 +326,30 @@ impl EncodingVars {
             }
         })
     }
+
+    pub fn lit_readable_name(&self, lit: Lit) -> Option<String> {
+        self.var_map.get(&lit.var()).map(|item| match item {
+            EncodedItem::Platform { point, dims } => {
+                format!(
+                    "{}P{}x{}({};{})",
+                    if lit.is_neg() { "~" } else { "" },
+                    dims.width,
+                    dims.height,
+                    point.x,
+                    point.y
+                )
+            }
+            EncodedItem::Terrain { point, layer } => {
+                format!(
+                    "{}T{}({};{})",
+                    if lit.is_neg() { "~" } else { "" },
+                    layer,
+                    point.x,
+                    point.y
+                )
+            }
+        })
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -381,8 +405,8 @@ impl EncodingDag {
 
         // Guide:
         // dag -> topo -> toposorted & revmap -> graph_reduced & graph_closure
-        // topo[graph_reduced index] -> dag index
-        // revmap[dag index] -> graph_reduced index
+        // dag[topo[graph_reduced index]]
+        // graph_reduced[revmap[dag index]]
         let topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
         let (dims_toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
             _,
@@ -475,6 +499,9 @@ pub fn encode(
     terrain: &WorldGrid,
     instance: &mut SatInstance<BasicVarManager>,
 ) -> EncodingVars {
+    // TODO: A lot of places here rely on all tiles having all platform vars
+    // maybe this should expect those lookups to be fallible?
+
     let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
 
     let dag = EncodingDag::new(vars.platform_dims());
@@ -525,15 +552,29 @@ pub fn encode(
         }
 
         // ===== Platform-terrain clauses =====
+        // Point -> disjunction of platforms
+        // For the current tile, look at all platforms that support this tile.
+        // (This means platforms to the top-left of the current point.)
+        // This is effectively a reverse iteration - rather than taking a platform
+        // _here_ and binding _other_ tiles to it, this takes the _current_ tile and
+        // binds _other_ platforms to it. The point doesn't move, where we look for
+        // other platforms moves.
+        // First make sure there even _is_ a terrain tile above
+        if let Some(point_var) = current_vars.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]) {
+            let platform_vars =
+                dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                    // Check that we're not looking out of bounds, and get the platform var there
+                    vars.at(p - offset).map(|v| v.dims_vars[&dims])
+                });
 
-        for (point, dims) in dag.iter_point_platform_edges_reduced() {
-            if let Some(point_var) =
-                vars.at(p + point).and_then(|v| v.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]))
-            {
-                // Point -> platform
-                instance
-                    .add_lit_impl_lit(point_var.pos_lit(), current_vars.dims_vars[&dims].pos_lit())
-            }
+            // If this binds to no platforms (shouldn't at the moment!), it'll become p ->
+            // [] An empty clause is unsat, so p would be forced to be false (as
+            // expected) It also translates to a [~p] CNF clause, so yeah,
+            // simple unit neg literal
+            instance.add_lit_impl_clause(
+                point_var.pos_lit(),
+                &platform_vars.map(|v| v.pos_lit()).collect_vec(),
+            );
         }
 
         // ===== Terrain support =====
@@ -730,32 +771,7 @@ mod tests {
         for clause in instance.cnf().iter() {
             let clause_str = clause
                 .iter()
-                .map(|&l| {
-                    vars.var_map
-                        .get(&l.var())
-                        .map(|item| match item {
-                            EncodedItem::Platform { point, dims } => {
-                                format!(
-                                    "{}P{}x{}({};{})",
-                                    if l.is_neg() { "~" } else { "" },
-                                    dims.width,
-                                    dims.height,
-                                    point.x,
-                                    point.y
-                                )
-                            }
-                            EncodedItem::Terrain { point, layer } => {
-                                format!(
-                                    "{}T{}({};{})",
-                                    if l.is_neg() { "~" } else { "" },
-                                    layer,
-                                    point.x,
-                                    point.y
-                                )
-                            }
-                        })
-                        .unwrap_or(format!("{l:?}"))
-                })
+                .map(|&l| vars.lit_readable_name(l).unwrap_or(format!("{l:?}")))
                 .join(" | ");
             println!("{}", clause_str);
         }

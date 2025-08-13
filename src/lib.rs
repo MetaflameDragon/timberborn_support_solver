@@ -460,10 +460,11 @@ impl Solution {
         let mut platforms = HashMap::new();
 
         // iter() goes over all assigned literals (excl. DontCare)
-        for (point, dims) in assignment
+        for (lit, (point, dims)) in assignment
             .iter()
-            .filter_map(|lit| lit.is_pos().then(|| vars.var_to_platform(lit.var()))?)
+            .filter_map(|lit| Some((lit, lit.is_pos().then(|| vars.var_to_platform(lit.var()))??)))
         {
+            info!("Active literal: {}", vars.lit_readable_name(lit).unwrap_or(format!("{lit:?}")));
             platforms.insert(point, *vars.dims_platform_map()[&dims].iter().next().unwrap());
         }
 

@@ -398,9 +398,9 @@ fn print_world(world: &World, solution: Option<&Solution>) {
         for (point, platform) in solution.platforms() {
             let platform = Platform::new(*point, *platform);
             let (lower, upper) = platform.area_corners().unwrap();
-            //
+
             let fill = '+';
-            //
+
             for y in lower.y..=upper.y {
                 for x in lower.x..=upper.x {
                     let q = Point::new(x, y);
