@@ -511,7 +511,7 @@ pub fn encode(
             // `->+`: transitive successor (1 or more edges)
             // `!->+`: not a transitive successor
 
-            // (~a | ~b | i), or also (a & b) -> i
+            // (~a | ~b | i1 | i2...), or also (a & b) -> (i1 | i2...)
             instance.add_cube_impl_clause(
                 &[
                     current_vars.for_dims(dims_a).unwrap().pos_lit(),
