@@ -1,37 +1,28 @@
 #![allow(dead_code)]
 
 use std::{
-    collections::{HashMap, HashSet},
-    ffi::OsStr,
+    collections::HashMap,
     fs,
-    fs::File,
     io::Write,
     num::ParseIntError,
-    ops::ControlFlow,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, bail, ensure};
-use assertables::{assert_gt, assert_le};
+use anyhow::{Context, bail};
 use clap::{
-    Arg, ArgAction, Command, CommandFactory, Error, FromArgMatches, Parser, Subcommand,
+    CommandFactory, FromArgMatches, Parser, Subcommand,
     builder::{TypedValueParser, ValueParserFactory},
-    value_parser,
 };
 use log::{error, info, trace, warn};
 use rustsat::solvers::InterruptSolver;
-use serde::Deserialize;
 use thiserror::Error;
 use timberborn_support_solver::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
     dimensions::Dimensions,
     grid::Grid,
-    platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
-    point::Point,
-    utils::loop_with_feedback,
-    world::{World, WorldGrid},
+    platform::{PLATFORMS_DEFAULT, PlatformDef},
+    world::World,
 };
 use tokio::select;
 use tokio_util::{future::FutureExt, sync::CancellationToken};
@@ -198,7 +189,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         if let Some(LoadedProject { project: _project, path }) = &state.loaded_project {
             // Try to show just the file name, fall back to the whole path
             let proj_path_str = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
-            println!("Currently loaded project: {}", proj_path_str);
+            println!("Currently loaded project: {proj_path_str}");
         };
 
         let cli = match parse_repl() {
@@ -208,7 +199,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 continue;
             }
             Err(err) => {
-                print!("{}", err.to_string());
+                print!("{}", err);
                 continue;
             }
         };
@@ -219,7 +210,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         }
 
         if let Err(err) = run_cmd(cmd, &mut state).await {
-            error!("{}", err.to_string());
+            error!("{}", err);
         }
     }
 
@@ -237,7 +228,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 };
 
                 state.loaded_project =
-                    Some(LoadedProject { project: load_project(&path)?, path: path.clone() });
+                    Some(LoadedProject { project: load_project(path)?, path: path.clone() });
                 println!("Loaded");
 
                 Ok(())
@@ -261,7 +252,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 let run_config = SolverRunConfig { limits };
 
                 let res = select! {
-                    res = run_solver(&project, solver, run_config) => {res},
+                    res = run_solver(project, solver, run_config) => {res},
 
                 };
                 if let Err(err) = res {
@@ -325,7 +316,7 @@ async fn run_solver(
                         interrupter.interrupt();
                     }
                     Some(Err(err)) => {
-                        error!("Interrupt listener error: {}", err);
+                        error!("Interrupt listener error: {err}");
                     }
                 }
             }
@@ -408,7 +399,7 @@ fn print_world(world: &World, solution: Option<&Solution>) {
 
     for row in char_grid.iter_rows() {
         for c in row {
-            print!("{}  ", c);
+            print!("{c}  ");
         }
         println!();
     }

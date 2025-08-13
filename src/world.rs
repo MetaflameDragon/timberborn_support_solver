@@ -1,7 +1,6 @@
 use std::{fmt::Formatter, iter};
 
 use assertables::assert_le;
-use clap::builder::TypedValueParser;
 use derive_more::{Deref, DerefMut};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
@@ -55,7 +54,6 @@ impl<'de> Visitor<'de> for WorldGridVisitor {
             .map(|row_str| -> Result<Vec<bool>, A::Error> {
                 row_str?
                     .chars()
-                    .into_iter()
                     .map(|c| match c {
                         ' ' => Ok(false),
                         'X' => Ok(true),

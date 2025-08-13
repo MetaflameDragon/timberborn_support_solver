@@ -1,32 +1,18 @@
-use std::{
-    array,
-    collections::HashMap,
-    io::Write,
-    iter::once,
-    num::NonZero,
-    ops::{Add, AddAssign},
-    pin::Pin,
-    sync::{Arc, Mutex},
-    task::Poll,
-};
+use std::{collections::HashMap, num::NonZero};
 
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
-use enum_iterator::Sequence;
-use enum_map::EnumMap;
-use futures::{FutureExt, SinkExt, Stream, StreamExt, TryFutureExt};
-use log::{info, trace};
+use futures::{FutureExt, StreamExt, TryFutureExt};
+use log::trace;
 use new_zealand::nz;
 use rustsat::{
     encodings::{card, card::Totalizer},
     instances::{BasicVarManager, SatInstance},
     solvers::{Interrupt, InterruptSolver, Solve},
-    types::{Assignment, Var, constraints::CardConstraint},
+    types::{Assignment, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     encoder::EncodingVars,
@@ -137,7 +123,7 @@ impl SolverConfig {
         if let (platform_type, Some(&limit)) =
             (PLATFORMS_DEFAULT[0], cfg.limits().get(&PLATFORMS_DEFAULT[0]))
         {
-            println!("Limiting {} platforms to n <= {}", platform_type, limit);
+            println!("Limiting {platform_type} platforms to n <= {limit}");
             let upper_constraint = CardConstraint::new_ub(
                 vars.iter_dims_vars(platform_type.dims()).unwrap().map(|var| var.pos_lit()),
                 limit,

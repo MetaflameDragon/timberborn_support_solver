@@ -80,7 +80,6 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    env::var,
     fmt::{Debug, Display, Formatter},
     hash::{Hash, Hasher},
     iter,
@@ -88,25 +87,23 @@ use std::{
 };
 
 use derive_more::From;
-use enum_map::Enum;
 use itertools::Itertools;
 use petgraph::{
-    adj::{DefaultIx, IndexType, UnweightedList},
-    graph::DiGraph,
-    graphmap::NodeTrait,
-    prelude::{NodeIndex, *},
-    visit::{IntoEdgeReferences, IntoEdges, IntoNodeIdentifiers, IntoNodeReferences},
+    adj::UnweightedList,
+    graph::{DefaultIx, IndexType},
+    prelude::*,
+    visit::{IntoEdgeReferences, IntoEdges, IntoNodeReferences},
 };
 use rustsat::{
-    instances::{BasicVarManager, Cnf, ManageVars, OptInstance, SatInstance},
-    types::{Clause, Lit, Var},
+    instances::{BasicVarManager, ManageVars, SatInstance},
+    types::{Lit, Var},
 };
 
 use crate::{
     TERRAIN_SUPPORT_DISTANCE,
     dimensions::Dimensions,
     grid::Grid,
-    platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
+    platform::{Platform, PlatformDef},
     point::Point,
     world::WorldGrid,
 };
@@ -300,7 +297,7 @@ impl EncodingVars {
         self.grid.get(point)?.for_dims(dims)
     }
     pub fn platform_dims(&self) -> impl Iterator<Item = Dimensions> + Clone {
-        self.dim_map.keys().cloned().into_iter()
+        self.dim_map.keys().cloned()
     }
 
     pub fn iter_dims_vars(&self, dims: Dimensions) -> Option<impl Iterator<Item = Var>> {
@@ -496,7 +493,7 @@ impl EncodingDag {
 
     pub fn maximal_from(&self, indices: &[TypedIx<Toposorted>]) -> Vec<TypedIx<Toposorted>> {
         indices
-            .into_iter()
+            .iter()
             .copied()
             .filter(|n| !indices.iter().any(|m| self.closure.contains_edge(*m, *n)))
             .collect()
@@ -625,19 +622,16 @@ pub fn encode(
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Debug, fs, hash::Hasher, io::Write, iter, marker::PhantomData, path::Path};
+    use std::{fs, io::Write, path::Path};
 
-    use itertools::Itertools;
     use petgraph::{
-        EdgeType, Graph,
-        adj::DefaultIx,
+        EdgeType,
         dot::{Config, Config::NodeNoLabel, Dot},
-        graph::{IndexType, NodeIndex},
-        prelude::*,
-        visit::{IntoEdges, IntoNodeIdentifiers, IntoNodeReferences},
+        visit::IntoNodeIdentifiers,
     };
 
     use super::*;
+    use crate::platform::PLATFORMS_DEFAULT;
 
     #[test]
     fn platform_type_graph_print() {
@@ -663,7 +657,7 @@ mod tests {
         // node_topo: graph_reduced index -> dag index
         // revmap: dag index -> graph_reduced index
 
-        enum Toposorted {};
+        enum Toposorted {}
         let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
         let (toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
             _,

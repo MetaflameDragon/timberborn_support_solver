@@ -16,8 +16,8 @@ impl<T> Grid<T> {
     }
 
     pub fn iter_rows(&self) -> impl Iterator<Item = &[T]> {
-        debug_assert_eq!(self.data.len() % self.dims.width as usize, 0);
-        self.data.chunks_exact(self.dims.width as usize)
+        debug_assert_eq!(self.data.len() % self.dims.width, 0);
+        self.data.chunks_exact(self.dims.width)
     }
 
     pub fn from_fn<F>(dims: Dimensions, map_fn: F) -> Self
@@ -76,6 +76,6 @@ impl<T: Clone> Grid<T> {
         let Some(flat_size) = dims.width.checked_mul(dims.height) else {
             panic!("Dimensions too large! {}*{} would overflow", dims.width, dims.height);
         };
-        Grid { data: vec![value; flat_size as usize], dims }
+        Grid { data: vec![value; flat_size], dims }
     }
 }

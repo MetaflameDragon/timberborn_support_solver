@@ -2,9 +2,6 @@
 
 use std::fmt::{Display, Formatter};
 
-use derive_more::with_trait::IsVariant;
-use enum_iterator::Sequence;
-use enum_map::Enum;
 use serde::{Deserialize, Serialize};
 
 use crate::{dimensions::Dimensions, point::Point};
