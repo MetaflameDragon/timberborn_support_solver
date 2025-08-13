@@ -26,6 +26,7 @@ pub mod encoder;
 pub mod grid;
 pub mod platform;
 pub mod point;
+mod typed_ix;
 pub mod utils;
 pub mod world;
 
