@@ -348,8 +348,7 @@ async fn run_solver(
             println!("Found a solution with no platforms - aborting");
             return Ok(());
         }
-        // assert_gt!(sol.platform_count(), 0, "Solution should have at least one
-        // platform");
+
         run_config.limits_mut().entry(PLATFORMS_DEFAULT[0]).insert_entry(sol.platform_count() - 1);
         // todo!();
 
