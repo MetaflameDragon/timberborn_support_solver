@@ -106,7 +106,7 @@ use crate::{
     TERRAIN_SUPPORT_DISTANCE,
     dimensions::Dimensions,
     grid::Grid,
-    platform::{PLATFORMS_DEFAULT, PlatformDef},
+    platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
     point::Point,
     world::WorldGrid,
 };
@@ -317,10 +317,19 @@ impl EncodingVars {
         &self.dim_map
     }
 
-    pub fn var_to_platform(&self, var: Var) -> Option<(Point, Dimensions)> {
+    pub fn var_to_platform(&self, var: Var) -> Option<Platform> {
         self.var_map.get(&var).and_then(|item| {
             if let EncodedItem::Platform { point, dims } = item {
-                Some((*point, *dims))
+                let def = self
+                    .dim_map
+                    .get(dims)
+                    .and_then(|s| s.iter().next())
+                    .expect("encoded platform did not map to a platform def");
+
+                debug_assert!(def.dims() == *dims || def.dims() == dims.flipped());
+                let rotated = def.dims() != *dims;
+
+                Some(Platform::new(*point, *def, rotated))
             } else {
                 None
             }

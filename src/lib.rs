@@ -452,7 +452,7 @@ fn encode_world_constraints(
 
 #[derive(Clone, Debug)]
 pub struct Solution {
-    platforms: HashMap<Point, PlatformDef>,
+    platforms: HashMap<Point, Platform>,
 }
 
 impl Solution {
@@ -460,12 +460,21 @@ impl Solution {
         let mut platforms = HashMap::new();
 
         // iter() goes over all assigned literals (excl. DontCare)
-        for (lit, (point, dims)) in assignment
+        for (lit, plat) in assignment
             .iter()
             .filter_map(|lit| Some((lit, lit.is_pos().then(|| vars.var_to_platform(lit.var()))??)))
         {
             info!("Active literal: {}", vars.lit_readable_name(lit).unwrap_or(format!("{lit:?}")));
-            platforms.insert(point, *vars.dims_platform_map()[&dims].iter().next().unwrap());
+            platforms
+                .entry(plat.point())
+                .and_modify(|previous: &mut Platform| {
+                    if previous.def().dims() < plat.def().dims() {
+                        // Update only if larger
+                        *previous = plat;
+                    }
+                })
+                .or_insert(plat);
+            info!("=> {plat:?}");
         }
 
         // for (&p, &var) in &variables.platforms_1x1 {
@@ -487,7 +496,7 @@ impl Solution {
         Solution { platforms }
     }
 
-    pub fn platforms(&self) -> &HashMap<Point, PlatformDef> {
+    pub fn platforms(&self) -> &HashMap<Point, Platform> {
         &self.platforms
     }
 
@@ -508,13 +517,13 @@ impl Solution {
             *n = n.checked_add(1).unwrap();
         }
 
-        self.platforms().iter().fold(HashMap::new(), |mut map, (_, &ty)| {
-            map.entry(ty).and_modify(increment).or_insert(nz!(1));
+        self.platforms().iter().fold(HashMap::new(), |mut map, (_, &plat)| {
+            map.entry(plat.def()).and_modify(increment).or_insert(nz!(1));
             map
         })
     }
 
     pub fn get_platform(&self, p: Point) -> Option<Platform> {
-        self.platforms.get(&p).map(|t| Platform::new(p, *t))
+        self.platforms.get(&p).copied()
     }
 }

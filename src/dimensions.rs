@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::point::Point;
 
+/// 2D dimensions with a width and a height.
+///
+/// Dimensions have a partial ordering defined,
+/// such that: `a <= b` <-> `a` is contained within `b`.
 #[derive(Debug, Copy, Clone, Eq)]
 #[derive(Serialize, Deserialize)]
 pub struct Dimensions {

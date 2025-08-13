@@ -395,18 +395,14 @@ fn print_world(world: &World, solution: Option<&Solution>) {
     }
 
     if let Some(solution) = solution {
-        for (point, platform) in solution.platforms() {
-            let platform = Platform::new(*point, *platform);
-            let (lower, upper) = platform.area_corners().unwrap();
+        for platform in solution.platforms().values() {
+            let offset = platform.point();
 
             let fill = '+';
 
-            for y in lower.y..=upper.y {
-                for x in lower.x..=upper.x {
-                    let q = Point::new(x, y);
-                    // Pass if out of bounds
-                    _ = char_grid.set(q, fill);
-                }
+            for point in platform.dims().iter_within() {
+                // Pass if out of bounds
+                _ = char_grid.set(point + offset, fill);
             }
         }
     }
