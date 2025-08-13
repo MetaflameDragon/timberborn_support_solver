@@ -2,7 +2,7 @@ use std::{collections::HashMap, num::NonZero};
 
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::FutureExt;
 use log::trace;
 use new_zealand::nz;
 use rustsat::{

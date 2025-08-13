@@ -81,7 +81,7 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     fmt::{Debug, Display, Formatter},
-    hash::{Hash, Hasher},
+    hash::Hash,
     iter,
 };
 
@@ -186,7 +186,7 @@ where
 }
 
 #[derive(Clone, Debug)]
-struct EncodingTileVars {
+pub struct EncodingTileVars {
     dims_vars: HashMap<Dimensions, Var>,
     terrain: Option<[Var; TERRAIN_SUPPORT_DISTANCE]>,
 }
@@ -198,7 +198,7 @@ impl EncodingTileVars {
 }
 
 #[derive(Clone, Debug)]
-enum EncodedItem {
+pub enum EncodedItem {
     Platform { point: Point, dims: Dimensions },
     Terrain { point: Point, layer: usize },
 }
@@ -401,7 +401,7 @@ impl EncodingDag {
                 EncodingNode::Platform(dims) => Some((ix, *dims)),
                 _ => None,
             })
-            .map(|(ix, dims)| {
+            .map(|(ix, _)| {
                 self.reduced
                     .edges(self.revmap[ix.index()])
                     .map(|e| e.target())
