@@ -378,28 +378,83 @@ fn print_world(world: &World, solution: Option<&Solution>) {
     let terrain_grid = world.grid();
     let dims = terrain_grid.dims();
 
-    let mut char_grid = Grid::new_fill(dims, ' ');
+    #[derive(Copy, Clone, Debug)]
+    enum Tile {
+        Empty,
+        Terrain,
+        Platform(PlatformTile),
+    }
+
+    #[derive(Copy, Clone, Debug)]
+    struct PlatformTile {
+        north_edge: bool,
+        south_edge: bool,
+        west_edge: bool,
+        east_edge: bool,
+    }
+
+    let mut tile_grid = Grid::new_fill(dims, Tile::Empty);
 
     for p in terrain_grid.enumerate().filter_map(|(p, val)| val.then_some(p)) {
-        char_grid.set(p, block_char::MEDIUM_SHADE).unwrap();
+        tile_grid.set(p, Tile::Terrain).unwrap();
     }
 
     if let Some(solution) = solution {
         for platform in solution.platforms().values() {
             let offset = platform.point();
 
-            let fill = '+';
-
-            for point in platform.dims().iter_within() {
+            let dims = platform.dims();
+            for rel_point in dims.iter_within() {
+                let tile = PlatformTile {
+                    north_edge: rel_point.y == 0,
+                    south_edge: rel_point.y == (dims.height - 1) as isize,
+                    west_edge: rel_point.x == 0,
+                    east_edge: rel_point.x == (dims.width - 1) as isize,
+                };
                 // Pass if out of bounds
-                _ = char_grid.set(point + offset, fill);
+                _ = tile_grid.set(rel_point + offset, Tile::Platform(tile));
             }
         }
     }
 
-    for row in char_grid.iter_rows() {
-        for c in row {
-            print!("{c}  ");
+    let fill_platform_middle = false;
+
+    for row in tile_grid.iter_rows() {
+        for t in row {
+            let tile_str = match *t {
+                Tile::Empty => " ",
+                Tile::Terrain => &block_char::MEDIUM_SHADE.to_string(),
+                Tile::Platform(PlatformTile {
+                    north_edge: mut n,
+                    south_edge: mut s,
+                    west_edge: mut w,
+                    east_edge: mut e,
+                }) => {
+                    // NSWE are true if there's _empty space_ in that direction
+                    // The box chars function expects the opposite - where to connect to
+
+                    // If only the middle should be filled, make it draw only the outline
+                    if !fill_platform_middle {
+                        match (n, s, w, e) {
+                            (false, false, false, false) => {
+                                // Internal tile - make it empty instead
+                                (n, s, w, e) = (true, true, true, true);
+                            }
+                            (false, false, _, _) => {
+                                // NS connected - discard WE
+                                (w, e) = (true, true);
+                            }
+                            (_, _, false, false) => {
+                                // WE connected - discard NS
+                                (n, s) = (true, true);
+                            }
+                            _ => {}
+                        };
+                    }
+                    &box_char::by_adjacency_nswe(!n, !s, !w, !e).to_string()
+                }
+            };
+            print!("{tile_str}  ");
         }
         println!();
     }
@@ -434,4 +489,32 @@ mod block_char {
     pub const FULL: char = '\u{2588}';
     pub const LIGHT_SHADE: char = '\u{2591}';
     pub const MEDIUM_SHADE: char = '\u{2592}';
+}
+
+mod box_char {
+    const CHARS: [char; 16] = [
+        // Order: NSWE, E is LSb
+        ' ', // none
+        '╶', // E
+        '╴', // W
+        '─', // WE
+        '╷', // S
+        '┌', // SE
+        '┐', // SW
+        '┬', // SWE
+        '╵', // N
+        '└', // NE
+        '┘', // NW
+        '┴', // NWE
+        '│', // NS
+        '├', // NSE
+        '┤', // NSW
+        '┼', // NSWE
+    ];
+
+    pub const fn by_adjacency_nswe(north: bool, south: bool, west: bool, east: bool) -> char {
+        let index =
+            (north as usize) << 3 | (south as usize) << 2 | (west as usize) << 1 | (east as usize);
+        CHARS[index]
+    }
 }
