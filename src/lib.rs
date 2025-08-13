@@ -459,8 +459,11 @@ impl Solution {
     pub fn from_assignment(assignment: &Assignment, vars: &EncodingVars) -> Self {
         let mut platforms = HashMap::new();
 
-        // iter() already goes over positive literals
-        for (point, dims) in assignment.iter().filter_map(|lit| vars.var_to_platform(lit.var())) {
+        // iter() goes over all assigned literals (excl. DontCare)
+        for (point, dims) in assignment
+            .iter()
+            .filter_map(|lit| lit.is_pos().then(|| vars.var_to_platform(lit.var()))?)
+        {
             platforms.insert(point, *vars.dims_platform_map()[&dims].iter().next().unwrap());
         }
 
