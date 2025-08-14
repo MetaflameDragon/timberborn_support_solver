@@ -566,7 +566,6 @@ pub fn encode(
 
         // ===== Platform overlap =====
 
-        // TODO
         // Strategy:
         // All platforms are aligned by their top-left corner point
         // Iterate all points supported by platforms at this position

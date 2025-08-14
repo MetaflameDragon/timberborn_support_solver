@@ -21,6 +21,7 @@ use timberborn_support_solver::{
     dimensions::Dimensions,
     grid::Grid,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
+    platform_def,
     world::World,
 };
 use tokio::select;
@@ -339,8 +340,7 @@ async fn run_solver(
             return Ok(());
         }
 
-        run_config.limits_mut().entry(PLATFORMS_DEFAULT[0]).insert_entry(sol.platform_count() - 1);
-        // todo!();
+        run_config.limits_mut().entry(platform_def!(1, 1)).insert_entry(sol.platform_count() - 1);
 
         println!("Solution found ({} platforms total)", sol.platform_count());
         let platform_stats = sol.platform_stats();

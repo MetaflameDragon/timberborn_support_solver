@@ -48,11 +48,6 @@ pub struct SolverRunConfig {
 }
 
 impl SolverRunConfig {
-    pub fn max_platforms(&self) -> Option<usize> {
-        todo!()
-        // self.limits.get(&PlatformDef::Square1x1).copied()
-    }
-
     pub fn limits(&self) -> &PlatformLimits {
         &self.limits
     }

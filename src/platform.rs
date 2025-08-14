@@ -12,6 +12,7 @@ pub struct PlatformDef {
     dims: Dimensions,
 }
 
+#[macro_export]
 macro_rules! platform_def {
     ($x:literal, $y:literal) => {
         PlatformDef::new(Dimensions::new($x, $y))
