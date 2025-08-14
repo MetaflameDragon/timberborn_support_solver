@@ -1,4 +1,8 @@
-use std::{collections::HashMap, num::NonZero};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZero,
+    ops::Not,
+};
 
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
@@ -17,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     encoder::EncodingVars,
+    grid::Grid,
     platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
     point::Point,
     world::World,
@@ -243,4 +248,79 @@ impl Solution {
     pub fn get_platform(&self, p: Point) -> Option<Platform> {
         self.platforms.get(&p).copied()
     }
+
+    pub fn validate(&self, world: &World) -> ValidationResult {
+        enum TerrainState {
+            None,
+            Unsupported,
+            Supported,
+        }
+
+        struct Tile<'a> {
+            terrain_supported: Option<bool>,
+            occupied_by: Option<&'a Platform>,
+        }
+
+        let mut overlapping_platforms: HashSet<Platform> = HashSet::new();
+
+        let mut tracking_grid = Grid::try_from_vec(
+            world.grid().dims(),
+            world
+                .grid()
+                .iter()
+                .map(|b| Tile { terrain_supported: b.then_some(false), occupied_by: None })
+                .collect_vec(),
+        )
+        .unwrap();
+
+        for (_, plat) in self.platforms.iter() {
+            for mut point in plat.dims().iter_within() {
+                point = point + plat.point();
+
+                if let Some(tile) = tracking_grid.get_mut(point) {
+                    if let Some(other) = tile.occupied_by {
+                        // Platform overlap!
+                        overlapping_platforms.insert(plat.clone());
+                        overlapping_platforms.insert(other.clone());
+                    } else {
+                        tile.occupied_by = Some(&plat);
+                    }
+                    // Only terrain can be supported
+                    if let Some(supported) = tile.terrain_supported.as_mut() {
+                        *supported = true;
+                    }
+                }
+            }
+        }
+
+        // Extend terrain support
+        for _ in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
+            let supported_set: HashSet<Point> = tracking_grid
+                .enumerate()
+                .filter_map(|(p, t)| t.terrain_supported.and_then(|b| b.then_some(p)))
+                .flat_map(Point::neighbors)
+                .collect();
+            for p in supported_set {
+                if let Some(tile) = tracking_grid.get_mut(p)
+                    && tile.terrain_supported.is_some()
+                {
+                    // Extend support only if there's terrain
+                    tile.terrain_supported = Some(true);
+                }
+            }
+        }
+
+        let unsupported_terrain = tracking_grid
+            .enumerate()
+            .filter_map(|(p, t)| (t.terrain_supported == Some(false)).then_some(p))
+            .collect();
+
+        ValidationResult { overlapping_platforms, unsupported_terrain }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidationResult {
+    pub unsupported_terrain: HashSet<Point>,
+    pub overlapping_platforms: HashSet<Platform>,
 }

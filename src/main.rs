@@ -14,11 +14,13 @@ use clap::{
     CommandFactory, FromArgMatches, Parser, Subcommand,
     builder::{TypedValueParser, ValueParserFactory},
 };
+use itertools::Itertools;
 use log::{error, info, trace, warn};
 use rustsat::solvers::InterruptSolver;
 use thiserror::Error;
 use timberborn_support_solver::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
+    ValidationResult,
     dimensions::Dimensions,
     grid::Grid,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
@@ -348,6 +350,43 @@ async fn run_solver(
         for (def, count) in platform_stats.iter() {
             println!("{}: {}", def.dimensions_str(), count);
         }
+        let validation = sol.validate(&project.world);
+        if validation.overlapping_platforms.is_empty() && validation.unsupported_terrain.is_empty()
+        {
+            info!("Solution validation OK");
+        } else {
+            if !validation.overlapping_platforms.is_empty() {
+                warn!(
+                    "Validation failed: overlapping platforms:\n{}",
+                    validation
+                        .overlapping_platforms
+                        .iter()
+                        .map(|plat| format!(
+                            "{}x{} at ({:>3};{:>3})",
+                            plat.dims().width,
+                            plat.dims().height,
+                            plat.point().x,
+                            plat.point().y
+                        ))
+                        .join("\n")
+                );
+            }
+
+            if !validation.unsupported_terrain.is_empty() {
+                warn!(
+                    "Validation failed: Unsupported terrain:\n{}",
+                    validation
+                        .unsupported_terrain
+                        .iter()
+                        .map(|point| format!("({:>3};{:>3})", point.x, point.y))
+                        .chunks(10)
+                        .into_iter()
+                        .map(|mut chunk| chunk.join(", "))
+                        .join("\n")
+                );
+            }
+        }
+
         print_world(&project.world, Some(&sol));
     }
 }
