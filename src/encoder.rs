@@ -83,6 +83,7 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     iter,
+    ops::Not,
 };
 
 use derive_more::From;
@@ -612,6 +613,19 @@ pub fn encode(
             {
                 instance.add_lit_impl_lit(plat_var.pos_lit(), other_plat_var.neg_lit());
             }
+        }
+
+        // ===== Out-of-bounds platforms =====
+
+        // This simply forbids platforms that would go outside the bounds of the grid
+        for plat_var in dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+            terrain
+                .dims()
+                .contains(current_point + offset)
+                .not()
+                .then_some(current_vars.dims_vars[&dims])
+        }) {
+            instance.add_unit(plat_var.neg_lit());
         }
     }
 
