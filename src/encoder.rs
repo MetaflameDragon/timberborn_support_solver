@@ -590,6 +590,30 @@ pub fn encode(
         {
             instance.add_lit_impl_lit(plat_var.pos_lit(), overlapping_1x1_var.neg_lit());
         }
+
+        // For the "top edge" of the supported point rectangle, restrict
+        // "left edge"-point-supporting platforms that intersect
+        // Forward-step for all (x;0) & reverse-step for all (0;y) from that point
+        for (plat_var, intersection_point) in
+            dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                // Skip (relative) 0;0 because that would make a platform restrict itself
+                (offset != Point::new(0, 0) && offset.y == 0)
+                    .then_some((current_vars.dims_vars[&dims], offset))
+            })
+        {
+            for other_plat_var in
+                dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                    // The (0;0) skip is unnecessary here, but it would produce a duplicate clause
+                    // Combining this with the previous step would help
+                    (offset != Point::new(0, 0) && offset.x == 0).then(|| {
+                        vars.at(current_point + intersection_point - offset)
+                            .map(|v| v.dims_vars[&dims])
+                    })?
+                })
+            {
+                instance.add_lit_impl_lit(plat_var.pos_lit(), other_plat_var.neg_lit());
+            }
+        }
     }
 
     vars
