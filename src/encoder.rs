@@ -389,6 +389,10 @@ impl EncodingDag {
         })
     }
 
+    /// Iterate Point -> Platform edges in the graph.
+    ///
+    /// This is the smallest platform (based on transitive reduction) that
+    /// supports a given point.
     pub fn iter_point_platform_edges_reduced(&self) -> impl Iterator<Item = (Point, Dimensions)> {
         self.iter_edges_reduced().filter_map(|pair| match pair {
             (EncodingNode::Point(source), EncodingNode::Platform(target)) => Some((source, target)),
@@ -462,8 +466,8 @@ pub fn encode(
     let dag = EncodingDag::new(vars.platform_dims());
     dbg!(&dag);
 
-    for p in terrain.dims().iter_within() {
-        let current_vars = vars.at(p).unwrap();
+    for current_point in terrain.dims().iter_within() {
+        let current_vars = vars.at(current_point).unwrap();
 
         // ===== Platform selection DAG =====
         for (smaller, larger) in dag.iter_platform_edges_reduced() {
@@ -519,7 +523,7 @@ pub fn encode(
             let platform_vars =
                 dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
                     // Check that we're not looking out of bounds, and get the platform var there
-                    vars.at(p - offset).map(|v| v.dims_vars[&dims])
+                    vars.at(current_point - offset).map(|v| v.dims_vars[&dims])
                 });
 
             // If this binds to no platforms (shouldn't at the moment!), it'll become p ->
@@ -536,7 +540,7 @@ pub fn encode(
 
         if let Some(point_terrain) = current_vars.terrain {
             // For the current tile, get all neighbors
-            let neighbor_terrain_vars: Vec<_> = p
+            let neighbor_terrain_vars: Vec<_> = current_point
                 .neighbors()
                 .into_iter()
                 .flat_map(|n| vars.at(n).and_then(|v| v.terrain))
@@ -563,6 +567,29 @@ pub fn encode(
         // ===== Platform overlap =====
 
         // TODO
+        // Strategy:
+        // All platforms are aligned by their top-left corner point
+        // Iterate all points supported by platforms at this position
+        // For each point, forbid the 1x1 point at that location
+        // (Note: this assumes the existence of a 1x1 platform - this can be
+        // resolved by adding a "fake" 1x1 if it's missing, TODO later)
+        // Then, for each point at the top edge (x; 0), iterate the left edge
+        // (0; y), map those points to platforms supporting them, and forbid those.
+
+        // Restrict "top-left-corner overlaps", i.e. where a platform's top-left corner
+        // is located within another
+        for (plat_var, overlapping_1x1_var) in
+            dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                // Skip (relative) 0;0 because that would make a platform restrict itself
+                (offset != Point::new(0, 0)).then_some((
+                    current_vars.dims_vars[&dims],
+                    // Assumes that 1x1 exists!
+                    vars.at(current_point + offset).map(|v| v.dims_vars[&Dimensions::new(1, 1)])?,
+                ))
+            })
+        {
+            instance.add_lit_impl_lit(plat_var.pos_lit(), overlapping_1x1_var.neg_lit());
+        }
     }
 
     vars
