@@ -1,5 +1,7 @@
 //! # Platform SAT encoding
 //!
+//! TODO: Rewrite/update
+//!
 //! There are various sizes of platforms, both rectangular and square-shaped. In
 //! particular, Timberborn has the basic 1x1 platform, then larger 3x3 and 5x5
 //! variants, and then rectangular ones from 1x2 to 1x6 (with rotated variants).
@@ -77,26 +79,40 @@
 
 use std::{
     cmp::Ordering,
-    fmt::{Display, Formatter},
-    hash::RandomState,
+    collections::{HashMap, HashSet},
+    fmt::{Debug, Display, Formatter},
+    hash::Hash,
+    iter,
 };
 
 use derive_more::From;
-use enum_map::Enum;
-use itertools::iproduct;
-use petgraph::graphmap::DiGraphMap;
+use itertools::Itertools;
+use petgraph::{
+    adj::UnweightedList,
+    graph::IndexType,
+    prelude::*,
+    visit::{IntoEdgeReferences, IntoEdges, IntoNodeReferences},
+};
+use rustsat::{
+    instances::{BasicVarManager, ManageVars, SatInstance},
+    types::{Lit, Var},
+};
 
 use crate::{
-    dimensions::{DimTy, Dimensions},
-    platform::PlatformType,
+    TERRAIN_SUPPORT_DISTANCE,
+    dimensions::Dimensions,
+    grid::Grid,
+    platform::{Platform, PlatformDef},
     point::Point,
+    typed_ix::TypedIx,
+    world::WorldGrid,
 };
 
 #[derive(Copy, Clone, Debug)]
 #[derive(Eq, PartialEq, Hash)]
 #[derive(From)]
 pub enum Node {
-    Platform(PlatformType),
+    Platform(Dimensions),
     Terrain(Point),
 }
 
@@ -107,7 +123,10 @@ impl Ord for Node {
             (Node::Terrain(a), Node::Terrain(b)) => a.cmp(b),
             (Node::Terrain(_), Node::Platform(_)) => Ordering::Less,
             (Node::Platform(_), Node::Terrain(_)) => Ordering::Greater,
-            (Node::Platform(a), Node::Platform(b)) => a.into_usize().cmp(&b.into_usize()),
+            (Node::Platform(a), Node::Platform(b)) => {
+                // Ordering specific to Node! Does not match dimension ordering
+                (a.width(), a.height()).cmp(&(b.width(), b.height()))
+            }
         }
     }
 }
@@ -122,54 +141,481 @@ impl PartialOrd for Node {
 impl Display for Node {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Node::Platform(plat) => write!(f, "Platform {plat}"),
+            Node::Platform(dims) => write!(f, "Platform {}x{}", dims.width(), dims.height()),
             Node::Terrain(Point { x, y }) => write!(f, "({x}, {y})"),
         }
     }
 }
 
-/// Creates a directed acyclic graph for platforms and terrain tiles.
-///
-/// For platforms `a` and `b`, `a <- b` iff `area(a) <: area(b)`, i.e. `b`
-/// entirely encapsulates `a`.
-///
-/// The graph is generated at runtime, so caching is recommended. It is also
-/// transitively closed. See also
-/// [`dag_transitive_reduction_closure`][`petgraph::algo::tred::dag_transitive_reduction_closure`].
-pub fn platform_type_graph() -> DiGraphMap<Node, (), RandomState> {
-    // Note: RustRover handles conditionally disable type params incorrectly, so the
-    // default has to be specified explicitly
-    let mut g = DiGraphMap::<Node, (), _>::new();
+/// Maps dimensions to platform definitions, including rotated variants.
+pub fn dims_platform_map(
+    platform_defs: &[PlatformDef],
+) -> HashMap<Dimensions, HashSet<PlatformDef>> {
+    let mut map: HashMap<_, HashSet<PlatformDef>> = HashMap::new();
+    for p in platform_defs.iter() {
+        map.entry(p.dims()).or_default().insert(*p);
+        map.entry(p.dims().flipped()).or_default().insert(*p);
+    }
+    map
+}
 
-    for (plat, other) in
-        iproduct!(enum_iterator::all::<PlatformType>(), enum_iterator::all::<PlatformType>())
-    {
-        // Skip self loops! This makes it easier to use toposort later
-        if plat == other {
-            continue;
-        }
+/// Creates a directed acyclic graph for a set of items with [`PartialOrd`],
+/// such that smaller -> larger.
+///
+/// Uses a wrapper node type that must implement `Ord`.
+pub fn dag_by_partial_ord<T>(items: &[T]) -> DiGraph<T, (), usize>
+where
+    T: PartialOrd + Clone + Eq + Hash,
+{
+    let mut g = DiGraph::<T, (), usize>::with_capacity(items.len(), items.len().saturating_sub(1));
 
-        let self_corner = plat.area_outer_corner_relative();
-        let other_corner = other.area_outer_corner_relative();
-        if self_corner.x >= other_corner.x && self_corner.y >= other_corner.y {
-            // larger (self) -> smaller (other)
-            g.add_edge(plat.into(), other.into(), ());
-        }
+    let mut item_map = HashMap::new();
+
+    for item in items {
+        item_map.insert(item, g.add_node(item.clone()));
     }
 
-    for plat in enum_iterator::all::<PlatformType>() {
-        let self_corner = plat.area_outer_corner_relative();
-        for point in
-            Dimensions::new(self_corner.x as DimTy + 1, self_corner.y as DimTy + 1).iter_within()
-        {
-            // platform -> terrain
-            // Note that the implication in the SAT encoding will be reverse!
-            // More specifically: terrain -> (plat1 | plat2 | ...) for all in-edges
-            g.add_edge(plat.into(), point.into(), ());
+    for (this, other) in items.iter().cartesian_product(items) {
+        if other < this {
+            // smaller (other) -> larger (this)
+            g.add_edge(item_map[other], item_map[this], ());
         }
     }
 
     g
+}
+
+#[derive(Clone, Debug)]
+pub struct EncodingTileVars {
+    dims_vars: HashMap<Dimensions, Var>,
+    terrain: Option<[Var; TERRAIN_SUPPORT_DISTANCE]>,
+}
+
+impl EncodingTileVars {
+    pub fn for_dims(&self, dims: Dimensions) -> Option<Var> {
+        self.dims_vars.get(&dims).cloned()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum EncodedItem {
+    Platform { point: Point, dims: Dimensions },
+    Terrain { point: Point, layer: usize },
+}
+
+#[derive(Clone, Debug)]
+pub struct EncodingVars {
+    dim_map: HashMap<Dimensions, HashSet<PlatformDef>>,
+    grid: Grid<EncodingTileVars>,
+    var_map: HashMap<Var, EncodedItem>,
+}
+
+impl EncodingVars {
+    pub fn new(
+        platform_defs: &[PlatformDef],
+        terrain: &WorldGrid,
+        var_man: &mut BasicVarManager,
+    ) -> Self {
+        let dim_map = dims_platform_map(platform_defs);
+
+        let dim_keys: Vec<_> = dim_map.keys().cloned().collect();
+        let grid = Grid::from_fn(terrain.dims(), |p| EncodingTileVars {
+            dims_vars: dim_keys.iter().cloned().map(|k| (k, var_man.new_var())).collect(),
+            terrain: terrain.get(p).unwrap().then_some(std::array::from_fn(|_| var_man.new_var())),
+        });
+        let mut var_map = HashMap::new();
+        for (point, vars) in grid.enumerate() {
+            for (&dims, &var) in vars.dims_vars.iter() {
+                var_map.insert(var, EncodedItem::Platform { point, dims });
+            }
+            for (layer, var) in vars.terrain.iter().flatten().enumerate() {
+                var_map.insert(*var, EncodedItem::Terrain { point, layer });
+            }
+        }
+        Self { dim_map, grid, var_map }
+    }
+
+    pub fn at(&self, point: Point) -> Option<&EncodingTileVars> {
+        self.grid.get(point)
+    }
+    pub fn for_dims_at(&self, point: Point, dims: Dimensions) -> Option<Var> {
+        self.grid.get(point)?.for_dims(dims)
+    }
+    pub fn platform_dims(&self) -> impl Iterator<Item = Dimensions> + Clone {
+        self.dim_map.keys().cloned()
+    }
+
+    pub fn iter_dims_vars(&self, dims: Dimensions) -> Option<impl Iterator<Item = Var>> {
+        self.dim_map
+            .contains_key(&dims)
+            .then_some(self.grid.iter().map(move |vars| vars.dims_vars[&dims]))
+    }
+
+    pub fn var_map(&self) -> &HashMap<Var, EncodedItem> {
+        &self.var_map
+    }
+
+    pub fn dims_platform_map(&self) -> &HashMap<Dimensions, HashSet<PlatformDef>> {
+        &self.dim_map
+    }
+
+    pub fn var_to_platform(&self, var: Var) -> Option<Platform> {
+        self.var_map.get(&var).and_then(|item| {
+            if let EncodedItem::Platform { point, dims } = item {
+                let def = self
+                    .dim_map
+                    .get(dims)
+                    .and_then(|s| s.iter().next())
+                    .expect("encoded platform did not map to a platform def");
+
+                debug_assert!(def.dims() == *dims || def.dims() == dims.flipped());
+                let rotated = def.dims() != *dims;
+
+                Some(Platform::new(*point, *def, rotated))
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn lit_readable_name(&self, lit: Lit) -> Option<String> {
+        self.var_map.get(&lit.var()).map(|item| match item {
+            EncodedItem::Platform { point, dims } => {
+                format!(
+                    "{}P{}x{}({};{})",
+                    if lit.is_neg() { "~" } else { "" },
+                    dims.width,
+                    dims.height,
+                    point.x,
+                    point.y
+                )
+            }
+            EncodedItem::Terrain { point, layer } => {
+                format!(
+                    "{}T{}({};{})",
+                    if lit.is_neg() { "~" } else { "" },
+                    layer,
+                    point.x,
+                    point.y
+                )
+            }
+        })
+    }
+
+    pub fn iter_by_points(&self) -> impl Iterator<Item = &EncodingTileVars> {
+        self.grid.iter()
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum EncodingNode {
+    Platform(Dimensions),
+    Point(Point),
+}
+
+impl PartialOrd for EncodingNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (EncodingNode::Platform(dims), EncodingNode::Platform(other)) => {
+                dims.partial_cmp(other)
+            }
+            (EncodingNode::Platform(dims), EncodingNode::Point(point)) => {
+                dims.contains(*point).then_some(Ordering::Greater)
+            }
+            (EncodingNode::Point(point), EncodingNode::Platform(dims)) => {
+                dims.contains(*point).then_some(Ordering::Less)
+            }
+            (EncodingNode::Point(a), EncodingNode::Point(b)) => a.eq(b).then_some(Ordering::Equal),
+        }
+    }
+}
+
+enum Toposorted {}
+
+#[derive(Clone, Debug)]
+struct EncodingDag {
+    dag: DiGraph<EncodingNode, (), usize>,
+    closure: UnweightedList<TypedIx<Toposorted>>,
+    reduced: UnweightedList<TypedIx<Toposorted>>,
+    revmap: Vec<TypedIx<Toposorted>>,
+    topo: Vec<NodeIndex<usize>>,
+}
+
+impl EncodingDag {
+    pub fn new(platform_dims: impl Iterator<Item = Dimensions> + Clone) -> Self {
+        let dims_max = platform_dims.clone().fold(Dimensions::new(1, 1), |acc, dims| {
+            Dimensions::new(acc.width.max(dims.width), acc.height.max(dims.height))
+        });
+
+        let mut dag = dag_by_partial_ord(
+            &platform_dims
+                .map(EncodingNode::Platform)
+                .chain(dims_max.iter_within().map(EncodingNode::Point))
+                .collect_vec(),
+        );
+
+        // All points in the maximal rectangle covering all dimensions are tested
+        // Some point nodes may end up without any edges to platform dimensions
+        dag.retain_nodes(|g, n| g.neighbors_undirected(n).next().is_some());
+
+        // Guide:
+        // dag -> topo -> toposorted & revmap -> graph_reduced & graph_closure
+        // dag[topo[graph_reduced index]]
+        // graph_reduced[revmap[dag index]]
+        let topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
+        let (dims_toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
+            _,
+            TypedIx<Toposorted>,
+        >(&dag, &topo);
+
+        let (reduced, closure) =
+            petgraph::algo::tred::dag_transitive_reduction_closure(&dims_toposorted);
+
+        Self { dag, reduced, closure, revmap, topo }
+    }
+
+    pub fn iter_edges_reduced(&self) -> impl Iterator<Item = (EncodingNode, EncodingNode)> {
+        self.reduced.edge_references().map(|e| {
+            (self.dag[self.topo[e.source().index()]], self.dag[self.topo[e.target().index()]])
+        })
+    }
+
+    pub fn iter_platform_edges_reduced(&self) -> impl Iterator<Item = (Dimensions, Dimensions)> {
+        self.iter_edges_reduced().filter_map(|pair| match pair {
+            (EncodingNode::Platform(source), EncodingNode::Platform(target)) => {
+                Some((source, target))
+            }
+            _ => None,
+        })
+    }
+
+    /// Iterate Point -> Platform edges in the graph.
+    ///
+    /// This is the smallest platform (based on transitive reduction) that
+    /// supports a given point.
+    pub fn iter_point_platform_edges_reduced(&self) -> impl Iterator<Item = (Point, Dimensions)> {
+        self.iter_edges_reduced().filter_map(|pair| match pair {
+            (EncodingNode::Point(source), EncodingNode::Platform(target)) => Some((source, target)),
+            _ => None,
+        })
+    }
+
+    pub fn iter_platform_targets_by_source(
+        &self,
+    ) -> impl Iterator<Item = Vec<(TypedIx<Toposorted>, Dimensions)>> {
+        self.dag
+            .node_references()
+            .filter_map(|(ix, n)| match n {
+                EncodingNode::Platform(dims) => Some((ix, *dims)),
+                _ => None,
+            })
+            .map(|(ix, _)| {
+                self.reduced
+                    .edges(self.revmap[ix.index()])
+                    .map(|e| e.target())
+                    .map(|ix| match self.dag[self.topo[ix.index()]] {
+                        EncodingNode::Platform(dims) => (ix, dims),
+                        _ => {
+                            unreachable!(
+                                "out-edges from platform nodes are expected to always be platforms"
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+    }
+
+    pub fn common_platform_successors(
+        &self,
+        a: TypedIx<Toposorted>,
+        b: TypedIx<Toposorted>,
+    ) -> Vec<(TypedIx<Toposorted>, Dimensions)> {
+        self.closure
+            .edges(a)
+            .filter_map(|e| {
+                if self.closure.contains_edge(b, e.target())
+                    && let EncodingNode::Platform(dims) = self.dag[self.topo[e.target().index()]]
+                {
+                    Some((e.target(), dims))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn maximal_from(&self, indices: &[TypedIx<Toposorted>]) -> Vec<TypedIx<Toposorted>> {
+        indices
+            .iter()
+            .copied()
+            .filter(|n| !indices.iter().any(|m| self.closure.contains_edge(*m, *n)))
+            .collect()
+    }
+}
+
+pub fn encode(
+    platform_defs: &[PlatformDef],
+    terrain: &WorldGrid,
+    instance: &mut SatInstance<BasicVarManager>,
+) -> EncodingVars {
+    // TODO: A lot of places here rely on all tiles having all platform vars
+    // maybe this should expect those lookups to be fallible?
+
+    let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
+
+    let dag = EncodingDag::new(vars.platform_dims());
+    dbg!(&dag);
+
+    for current_point in terrain.dims().iter_within() {
+        let current_vars = vars.at(current_point).unwrap();
+
+        // ===== Platform selection DAG =====
+        for (smaller, larger) in dag.iter_platform_edges_reduced() {
+            // The DAG has nodes ordered as smaller -> larger
+            // This means that 1x1 has no in-edges, and the largest platforms have no
+            // out-edges We want the implications encoded as smaller <- larger
+            instance.add_lit_impl_lit(
+                current_vars.for_dims(larger).unwrap().pos_lit(),
+                current_vars.for_dims(smaller).unwrap().pos_lit(),
+            );
+        }
+
+        for ((ix_a, dims_a), (ix_b, dims_b)) in dag
+            .iter_platform_targets_by_source()
+            .flat_map(|targets| Itertools::tuple_combinations(targets.into_iter()))
+        {
+            // All nodes `n` such that `a ->+ n` and `b ->+ n`
+            // Then filters out nodes `n` for `m ->* n`
+            let common_successors = dag.common_platform_successors(ix_a, ix_b);
+            let common_successors_maximal_ixs: Vec<_> =
+                dag.maximal_from(&common_successors.iter().map(|(ix, _)| *ix).collect_vec());
+            let common_successors_maximal = common_successors.iter().filter_map(|(ix, dims)| {
+                common_successors_maximal_ixs.contains(ix).then_some(*dims)
+            });
+            // Result: pairs `a`, `b` and an associated set C, where:
+            // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
+            // `->+`: transitive successor (1 or more edges)
+            // `!->+`: not a transitive successor
+
+            // (~a | ~b | i1 | i2...), or also (a & b) -> (i1 | i2...)
+            instance.add_cube_impl_clause(
+                &[
+                    current_vars.for_dims(dims_a).unwrap().pos_lit(),
+                    current_vars.for_dims(dims_b).unwrap().pos_lit(),
+                ],
+                &common_successors_maximal
+                    .into_iter()
+                    .map(|dims| current_vars.for_dims(dims).unwrap().pos_lit())
+                    .collect_vec(),
+            );
+        }
+
+        // ===== Platform-terrain clauses =====
+        // Point -> disjunction of platforms
+        // For the current tile, look at all platforms that support this tile.
+        // (This means platforms to the top-left of the current point.)
+        // This is effectively a reverse iteration - rather than taking a platform
+        // _here_ and binding _other_ tiles to it, this takes the _current_ tile and
+        // binds _other_ platforms to it. The point doesn't move, where we look for
+        // other platforms moves.
+        // First make sure there even _is_ a terrain tile above
+        if let Some(point_var) = current_vars.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]) {
+            let platform_vars =
+                dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                    // Check that we're not looking out of bounds, and get the platform var there
+                    vars.at(current_point - offset).map(|v| v.dims_vars[&dims])
+                });
+
+            // If this binds to no platforms (shouldn't at the moment!), it'll become p ->
+            // [] An empty clause is unsat, so p would be forced to be false (as
+            // expected) It also translates to a [~p] CNF clause, so yeah,
+            // simple unit neg literal
+            instance.add_lit_impl_clause(
+                point_var.pos_lit(),
+                &platform_vars.map(|v| v.pos_lit()).collect_vec(),
+            );
+        }
+
+        // ===== Terrain support =====
+
+        if let Some(point_terrain) = current_vars.terrain {
+            // For the current tile, get all neighbors
+            let neighbor_terrain_vars: Vec<_> = current_point
+                .neighbors()
+                .into_iter()
+                .flat_map(|n| vars.at(n).and_then(|v| v.terrain))
+                .chain(iter::once(point_terrain))
+                .collect();
+            // Add for all layers, i -> j for i + 1 = j
+            for (i, j) in (0..TERRAIN_SUPPORT_DISTANCE).tuple_windows() {
+                // heights: i -> j
+                // Starts at 0 going down
+                // TERRAIN_SUPPORT_DISTANCE-1 is closest to platforms
+
+                // Add an implication: tile -> disjunction of neighbors below
+                instance.add_lit_impl_clause(
+                    point_terrain[i].pos_lit(),
+                    &neighbor_terrain_vars.iter().map(|v| v[j].pos_lit()).collect_vec(),
+                );
+            }
+
+            // Finally, require the topmost var
+            // TODO: this can be optimized trivially
+            instance.add_unit(point_terrain[0].pos_lit());
+        }
+
+        // ===== Platform overlap =====
+
+        // Strategy:
+        // All platforms are aligned by their top-left corner point
+        // Iterate all points supported by platforms at this position
+        // For each point, forbid the 1x1 point at that location
+        // (Note: this assumes the existence of a 1x1 platform - this can be
+        // resolved by adding a "fake" 1x1 if it's missing, TODO later)
+        // Then, for each point at the top edge (x; 0), iterate the left edge
+        // (0; y), map those points to platforms supporting them, and forbid those.
+
+        // Restrict "top-left-corner overlaps", i.e. where a platform's top-left corner
+        // is located within another
+        for (plat_var, overlapping_1x1_var) in
+            dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                // Skip (relative) 0;0 because that would make a platform restrict itself
+                (offset != Point::new(0, 0)).then_some((
+                    current_vars.dims_vars[&dims],
+                    // Assumes that 1x1 exists!
+                    vars.at(current_point + offset).map(|v| v.dims_vars[&Dimensions::new(1, 1)])?,
+                ))
+            })
+        {
+            instance.add_lit_impl_lit(plat_var.pos_lit(), overlapping_1x1_var.neg_lit());
+        }
+
+        // For the "top edge" of the supported point rectangle, restrict
+        // "left edge"-point-supporting platforms that intersect
+        // Forward-step for all (x;0) & reverse-step for all (0;y) from that point
+        for (plat_var, intersection_point) in
+            dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                // Skip (relative) 0;0 because that would make a platform restrict itself
+                (offset != Point::new(0, 0) && offset.y == 0)
+                    .then_some((current_vars.dims_vars[&dims], offset))
+            })
+        {
+            for other_plat_var in
+                dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                    // The (0;0) skip is unnecessary here, but it would produce a duplicate clause
+                    // Combining this with the previous step would help
+                    (offset != Point::new(0, 0) && offset.x == 0).then(|| {
+                        vars.at(current_point + intersection_point - offset)
+                            .map(|v| v.dims_vars[&dims])
+                    })?
+                })
+            {
+                instance.add_lit_impl_lit(plat_var.pos_lit(), other_plat_var.neg_lit());
+            }
+        }
+    }
+
+    vars
 }
 
 #[cfg(test)]
@@ -177,43 +623,103 @@ mod tests {
     use std::{fs, io::Write, path::Path};
 
     use petgraph::{
-        EdgeType, Graph,
-        adj::DefaultIx,
-        dot::{Config, Dot},
-        graph::{IndexType, NodeIndex},
+        EdgeType,
+        dot::{Config, Config::NodeNoLabel, Dot},
+        visit::IntoNodeIdentifiers,
     };
 
     use super::*;
+    use crate::platform::PLATFORMS_DEFAULT;
 
     #[test]
     fn platform_type_graph_print() {
-        let g = platform_type_graph();
+        let platform_map = dims_platform_map(&PLATFORMS_DEFAULT);
+        let g = dag_by_partial_ord(&platform_map.keys().cloned().collect::<Vec<Dimensions>>());
 
         use petgraph::visit::NodeRef;
 
-        let mut dag = g.into_graph::<DefaultIx>();
-        write_graph(&dag, "platform_graph.dot");
+        let getter = |dim: Dimensions| {
+            format!(
+                "{}x{}\\n({})",
+                dim.width(),
+                dim.height(),
+                platform_map.get(&dim).unwrap().iter().join(", ")
+            )
+        };
 
+        let dag = g.map(|_, dim| Node::Platform(*dim), |_, e| *e);
+        write_graph(&dag, "platform_graph.dot", getter);
+
+        // Guide:
+        // dag -> node_topo -> toposorted & revmap -> graph_reduced & graph_closure
+        // node_topo: graph_reduced index -> dag index
+        // revmap: dag index -> graph_reduced index
+
+        enum Toposorted {}
         let node_topo = petgraph::algo::toposort(&dag, None).expect("toposort failed");
         let (toposorted, revmap) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
             _,
-            NodeIndex,
+            TypedIx<Toposorted>,
         >(&dag, &node_topo);
 
         let (graph_reduced, graph_closure) =
             petgraph::algo::tred::dag_transitive_reduction_closure(&toposorted);
 
+        dbg!(&dag);
+        dbg!(&node_topo);
         dbg!(&toposorted);
+        dbg!(&revmap);
         dbg!(&graph_reduced);
 
-        dag.retain_edges(|g, e| {
+        let mut platform_graph_reduced = dag.clone();
+        platform_graph_reduced.retain_edges(|g, e| {
             let (a, b) = g.edge_endpoints(e).unwrap(); // Should not fail - we just got e
             graph_reduced.contains_edge(revmap[a.index()], revmap[b.index()])
         });
-        write_graph(&dag, "platform_graph_reduced.dot");
+        write_graph(&platform_graph_reduced, "platform_graph_reduced.dot", getter);
 
-        fn write_graph<E, Ty, Ix, P: AsRef<Path>>(g: &Graph<Node, E, Ty, Ix>, path: P)
-        where
+        fn node_is_platform<Ix: IndexType>(
+            g: &Graph<Node, (), Directed, Ix>,
+            i: NodeIndex<Ix>,
+        ) -> bool {
+            let node = (*g)[i];
+            matches!(node, Node::Platform(_))
+        }
+
+        for (a, b) in graph_reduced.node_identifiers().flat_map(|i| {
+            graph_reduced
+                .edges(i)
+                .map(|e| e.target())
+                .combinations(2)
+                .map(|combo| (combo[0], combo[1]))
+        }) {
+            // All nodes `n` such that `a ->+ n` and `b ->+ n`
+            let common_successors: Vec<_> = graph_closure
+                .edges(a)
+                .filter_map(|e| graph_closure.contains_edge(b, e.target()).then_some(e.target()))
+                .collect();
+            // Filters out nodes `n` for `m ->* n`
+            let common_successors_maximal: Vec<_> = common_successors
+                .iter()
+                .filter(|n| !common_successors.iter().any(|m| graph_closure.contains_edge(*m, **n)))
+                .collect();
+            // Result: pairs `a`, `b` and an associated set C, where:
+            // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
+            // `->+`: transitive successor (1 or more edges)
+            // `!->+`: not a transitive successor
+            let node_a = platform_graph_reduced[node_topo[a.index()]];
+            let node_b = platform_graph_reduced[node_topo[b.index()]];
+            let nodes_successors = common_successors_maximal
+                .into_iter()
+                .map(|i| platform_graph_reduced[node_topo[i.index()]]);
+            println!("!{} | !{} | {}", node_a, node_b, nodes_successors.into_iter().join(" | "));
+        }
+
+        fn write_graph<E, Ty, Ix, P: AsRef<Path>, F: Fn(Dimensions) -> String>(
+            g: &Graph<Node, E, Ty, Ix>,
+            path: P,
+            dim_label_getter: F,
+        ) where
             Ty: EdgeType,
             Ix: IndexType,
         {
@@ -223,21 +729,52 @@ mod tests {
                 .truncate(true)
                 .open(path)
                 .expect("Failed to create/overwrite file.");
-            let string_g = g.map(|_: NodeIndex<Ix>, n| n, |_, _| String::new());
+            let string_g = g.map(|_: NodeIndex<Ix>, n| *n, |_, _| String::new());
+            let attr_getter = |_, n: (NodeIndex<Ix>, &Node)| match n.weight() {
+                Node::Platform(dim) => {
+                    format!("label = \"{}\" group = \"platform\"", dim_label_getter(*dim))
+                        .to_string()
+                }
+                Node::Terrain(_) => "group = \"terrain\"".to_string(),
+            };
             let dot = Dot::with_attr_getters(
                 &string_g,
-                &[Config::EdgeNoLabel],
+                &[Config::EdgeNoLabel, NodeNoLabel],
                 &|_, _| String::new(),
-                &|_, n| {
-                    match n.weight() {
-                        Node::Platform(_) => "group = \"platform\"",
-                        Node::Terrain(_) => "group = \"terrain\"",
-                    }
-                    .to_string()
-                },
+                &attr_getter,
             );
 
             write!(file, "{}", dot).expect("Failed to write to file.");
+        }
+    }
+
+    #[test]
+    fn encode_test() {
+        let grid = b"\
+            .--.\
+            .-..\
+            ....\
+            --..\
+              "
+        .map(|c| match c as char {
+            '.' => true,
+            _ => false,
+        })
+        .to_vec();
+        let terrain = WorldGrid(Grid::try_from_vec(Dimensions::new(4, 4), grid).unwrap());
+
+        let mut instance = SatInstance::<BasicVarManager>::new();
+        let vars = encode(&PLATFORMS_DEFAULT, &terrain, &mut instance);
+
+        dbg!(&vars);
+        dbg!(&instance);
+
+        for clause in instance.cnf().iter() {
+            let clause_str = clause
+                .iter()
+                .map(|&l| vars.lit_readable_name(l).unwrap_or(format!("{l:?}")))
+                .join(" | ");
+            println!("{}", clause_str);
         }
     }
 }

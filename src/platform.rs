@@ -2,64 +2,57 @@
 
 use std::fmt::{Display, Formatter};
 
-use derive_more::with_trait::IsVariant;
-use enum_iterator::Sequence;
-use enum_map::Enum;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    platform::Orientation::{Horizontal, Vertical},
-    point::Point,
-};
+use crate::{dimensions::Dimensions, point::Point};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[derive(Serialize, Deserialize)]
-#[derive(Sequence, Enum, IsVariant)]
-pub enum Orientation {
-    Horizontal,
-    Vertical,
+pub struct PlatformDef {
+    dims: Dimensions,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-#[derive(Serialize, Deserialize)]
-#[derive(Sequence, Enum)]
-pub enum PlatformType {
-    Square1x1,
-    Square3x3,
-    Square5x5,
-    Rect1x2(Orientation),
+#[macro_export]
+macro_rules! platform_def {
+    ($x:literal, $y:literal) => {
+        PlatformDef::new(Dimensions::new($x, $y))
+    };
 }
 
-impl PlatformType {
+pub const PLATFORMS_DEFAULT: [PlatformDef; 8] = [
+    platform_def!(1, 1),
+    platform_def!(1, 2),
+    platform_def!(1, 3),
+    platform_def!(1, 4),
+    platform_def!(1, 5),
+    platform_def!(1, 6),
+    platform_def!(3, 3),
+    platform_def!(5, 5),
+];
+
+impl PlatformDef {
+    pub const fn new(dims: Dimensions) -> Self {
+        PlatformDef { dims }
+    }
+
     /// The outer corner of the area this platform covers (relative to the
     /// origin).
     ///
     /// The first corner is at (0, 0), and the corner point is inclusive.
-    pub const fn area_outer_corner_relative(self) -> Point {
-        use PlatformType::*;
-        match self {
-            Square1x1 => Point::new(0, 0),
-            Square3x3 => Point::new(2, 2),
-            Square5x5 => Point::new(4, 4),
-
-            Rect1x2(o) => Point::new(0, 1).flipped_if(o.is_vertical()),
-        }
+    pub const fn dims(self) -> Dimensions {
+        self.dims
     }
 
-    pub const fn dimensions_str(self) -> &'static str {
-        use Orientation::*;
-        use PlatformType::*;
-        match self {
-            Square1x1 => "1x1",
-            Square3x3 => "3x3",
-            Square5x5 => "5x5",
-            Rect1x2(Horizontal) => "1x2",
-            Rect1x2(Vertical) => "2x1",
-        }
+    pub fn dimensions_str(self) -> String {
+        format!("{}x{}", self.dims.width(), self.dims.height())
+    }
+
+    pub const fn rectangular(self) -> bool {
+        self.dims().width != self.dims().height
     }
 }
 
-impl Display for PlatformType {
+impl Display for PlatformDef {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.dimensions_str())
     }
@@ -69,12 +62,13 @@ impl Display for PlatformType {
 #[derive(Serialize, Deserialize)]
 pub struct Platform {
     point: Point,
-    r#type: PlatformType,
+    def: PlatformDef,
+    rotated: bool,
 }
 
 impl Platform {
-    pub fn new(point: Point, r#type: PlatformType) -> Self {
-        Self { point, r#type }
+    pub fn new(point: Point, def: PlatformDef, rotated: bool) -> Self {
+        Self { point, def, rotated }
     }
 
     /// Two corners of the area this platform covers (relative to this
@@ -84,14 +78,16 @@ impl Platform {
     ///
     /// This is better than referring to a platform's inner `point` directly,
     /// since the point may be placed arbitrarily.
-    pub fn area_corners(&self) -> (Point, Point) {
-        let b = self.r#type.area_outer_corner_relative();
-        (self.point, b + self.point)
+    pub fn area_corners(&self) -> Option<(Point, Point)> {
+        Some((self.point, self.dims().corner_point_incl()? + self.point))
     }
 
     pub fn overlaps(&self, other: &Self) -> bool {
-        let (self_near, self_far) = self.area_corners();
-        let (other_near, other_far) = other.area_corners();
+        let (Some((self_near, self_far)), Some((other_near, other_far))) =
+            (self.area_corners(), other.area_corners())
+        else {
+            return false;
+        };
 
         other_far.x >= self_near.x
             && other_far.y >= self_near.y
@@ -99,26 +95,43 @@ impl Platform {
             && other_near.y <= self_far.y
     }
 
-    pub fn platform_type(&self) -> PlatformType {
-        self.r#type
+    /// The top-left (min-xy) point of this platform.
+    pub fn point(&self) -> Point {
+        self.point
+    }
+
+    pub fn rotated(&self) -> bool {
+        self.rotated
+    }
+
+    /// Platform dimensions, taking rotation into account.
+    ///
+    /// Use `.def().dims()` to get the raw definition dimensions.
+    pub fn dims(&self) -> Dimensions {
+        if self.rotated() { self.def.dims().flipped() } else { self.def.dims() }
+    }
+
+    pub fn def(&self) -> PlatformDef {
+        self.def
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! platform {
     (1x1 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), PlatformType::Square1x1)
+        Platform::new(Point::new($x, $y), platform_def!(1, 1))
     };
     (1x2 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), PlatformType::Rect1x2(Horizontal))
+        Platform::new(Point::new($x, $y), platform_def!(1, 2))
     };
     (2x1 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), PlatformType::Rect1x2(Vertical))
+        Platform::new(Point::new($x, $y), platform_def!(2, 1))
     };
     (3x3 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), PlatformType::Square3x3)
+        Platform::new(Point::new($x, $y), platform_def!(3, 3))
     };
     (5x5 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), PlatformType::Square5x5)
+        Platform::new(Point::new($x, $y), platform_def!(5, 5))
     };
 }
 

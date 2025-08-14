@@ -1,51 +1,44 @@
 use std::{
-    array,
-    collections::HashMap,
-    io::Write,
-    iter::once,
+    collections::{HashMap, HashSet},
     num::NonZero,
-    ops::{Add, AddAssign},
-    pin::Pin,
-    sync::{Arc, Mutex},
-    task::Poll,
 };
 
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
-use enum_iterator::Sequence;
-use enum_map::EnumMap;
-use futures::{FutureExt, SinkExt, Stream, StreamExt, TryFutureExt};
-use log::info;
+use futures::TryFutureExt;
+use itertools::Itertools;
+use log::trace;
 use new_zealand::nz;
 use rustsat::{
     encodings::{card, card::Totalizer},
-    instances::{BasicVarManager, SatInstance},
+    instances::{BasicVarManager, ManageVars, SatInstance},
     solvers::{Interrupt, InterruptSolver, Solve},
-    types::{Assignment, Var, constraints::CardConstraint},
+    types::{Assignment, constraints::CardConstraint},
 };
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
-    platform::{Platform, PlatformType},
+    encoder::EncodingVars,
+    grid::Grid,
+    platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
     point::Point,
     world::World,
 };
 
 pub mod dimensions;
-mod encoder;
+pub mod encoder;
 pub mod grid;
 pub mod platform;
 pub mod point;
+mod typed_ix;
 pub mod utils;
 pub mod world;
 
 const TERRAIN_SUPPORT_DISTANCE: usize = 4;
 
 pub struct SolverConfig {
-    vars: Variables,
+    vars: EncodingVars,
     instance: SatInstance,
 }
 
@@ -55,14 +48,6 @@ pub struct SolverRunConfig {
 }
 
 impl SolverRunConfig {
-    /// The maximum number of platforms for the solution.
-    ///
-    /// This is the limit for 1x1 platforms, since they are the "superplatform"
-    /// of all other types (as in superset or superclass).
-    pub fn max_platforms(&self) -> Option<usize> {
-        self.limits.get(&PlatformType::Square1x1).copied()
-    }
-
     pub fn limits(&self) -> &PlatformLimits {
         &self.limits
     }
@@ -73,10 +58,10 @@ impl SolverRunConfig {
 }
 
 #[derive(Clone, Debug, Deref, DerefMut)]
-pub struct PlatformLimits(HashMap<PlatformType, usize>);
+pub struct PlatformLimits(HashMap<PlatformDef, usize>);
 
 impl PlatformLimits {
-    pub fn new(map: HashMap<PlatformType, usize>) -> Self {
+    pub fn new(map: HashMap<PlatformDef, usize>) -> Self {
         Self(map)
     }
 }
@@ -93,12 +78,12 @@ pub enum SolverResponse {
 impl SolverConfig {
     pub fn new(world: &World) -> SolverConfig {
         let mut instance: SatInstance<BasicVarManager> = SatInstance::new();
-        let vars: Variables = encode_world_constraints(world, &mut instance);
+        let vars = encoder::encode(&PLATFORMS_DEFAULT, world.grid(), &mut instance);
 
         SolverConfig { vars, instance }
     }
 
-    pub fn vars(&self) -> &Variables {
+    pub fn vars(&self) -> &EncodingVars {
         &self.vars
     }
 
@@ -113,17 +98,27 @@ impl SolverConfig {
         sat_solver.add_cnf(cnf).context("Failed to add CNF")?;
 
         for (&platform_type, &limit) in cfg.limits().iter() {
-            // TODO: Clarify what the encoding means
-            // The cardinality constraints still work in terms of "platform promotion",
-            // where smaller platforms "promote" to larger ones, and the vars for
-            // larger ones imply all their predecessors.
-            // This means that limiting 5x5 to <= 2 and 3x3 to <= 4 actually means
-            // "at most 4 of 3x3 or larger, and at most 2 of 5x5".
-            info!("Limiting {} platforms to n <= {}", platform_type, limit);
-            let upper_constraint = CardConstraint::new_ub(
-                vars.platform_vars_map(platform_type).values().map(|var| var.pos_lit()),
-                limit,
-            );
+            println!("Limiting {platform_type} platforms to n <= {limit}");
+            let upper_constraint = if platform_type.rectangular() {
+                let mut limit_vars = vec![];
+                for tile_vars in vars.iter_by_points() {
+                    let limit_var = var_manager.new_var();
+                    limit_vars.push(limit_var);
+                    for var in [platform_type.dims(), platform_type.dims().flipped()]
+                        .iter()
+                        .filter_map(|d| tile_vars.for_dims(*d))
+                    {
+                        sat_solver.add_binary(var.neg_lit(), limit_var.pos_lit())?;
+                    }
+                }
+
+                CardConstraint::new_ub(limit_vars.iter().map(|var| var.pos_lit()), limit)
+            } else {
+                CardConstraint::new_ub(
+                    vars.iter_dims_vars(platform_type.dims()).unwrap().map(|var| var.pos_lit()),
+                    limit,
+                )
+            };
 
             card::encode_cardinality_constraint::<Totalizer, _>(
                 upper_constraint,
@@ -183,282 +178,41 @@ pub struct Project {
     pub world: World, // TODO: run configs/profiles, previous sessions, etc.
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Variables {
-    platforms_1x1: HashMap<Point, Var>,
-    platforms_3x3: HashMap<Point, Var>,
-    platforms_5x5: HashMap<Point, Var>,
-    terrain_layers: HashMap<Point, [Var; TERRAIN_SUPPORT_DISTANCE]>,
-}
-
-impl Variables {
-    /// A map of all variables for a specific platform type
-    pub fn platform_vars_map(&self, ty: PlatformType) -> &HashMap<Point, Var> {
-        use PlatformType::*;
-        match ty {
-            Square1x1 => &self.platforms_1x1,
-            Square3x3 => &self.platforms_3x3,
-            Square5x5 => &self.platforms_5x5,
-            Rect1x2(_) => todo!(),
-        }
-    }
-
-    /// Variable for a single platform
-    pub fn platform_var(&self, ty: PlatformType, point: Point) -> Option<Var> {
-        self.platform_vars_map(ty).get(&point).cloned()
-    }
-
-    /// Variable for a single terrain tile
-    pub fn terrain_var(&self, point: Point) -> Option<Var> {
-        self.terrain_layers.get(&point).map(|layer| layer[TERRAIN_SUPPORT_DISTANCE - 1])
-    }
-
-    /// All variables for terrain tiles
-    pub fn terrain_vars(&self) -> impl Iterator<Item = (Point, Var)> {
-        self.terrain_layers.iter().map(|(&p, l)| (p, l[TERRAIN_SUPPORT_DISTANCE - 1]))
-    }
-
-    pub fn write_var_map<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
-        for (var, repr) in self.to_var_repr_map() {
-            writeln!(w, "{var} {repr}")?;
-        }
-
-        Ok(())
-    }
-
-    pub fn to_var_repr_map(&self) -> HashMap<Var, String> {
-        let mut map = HashMap::new();
-
-        for (prefix, hashmap) in
-            [("P1", &self.platforms_1x1), ("P3", &self.platforms_3x3), ("P5", &self.platforms_5x5)]
-        {
-            for (point, &var) in hashmap {
-                let Point { x, y } = point;
-                map.insert(var, format!("{prefix}({x},{y})"));
-            }
-        }
-
-        for (point, layers) in &self.terrain_layers {
-            for (i, &var) in layers.iter().enumerate() {
-                let Point { x, y } = point;
-                map.insert(var, format!("T{i}({x},{y})"));
-            }
-        }
-
-        map
-    }
-}
-
-fn encode_world_constraints(
-    world: &World,
-    instance: &mut SatInstance<BasicVarManager>,
-) -> Variables {
-    let terrain_grid = world.grid();
-
-    let mut vars: Variables = Default::default();
-
-    // Add vars for platforms, and implication clauses between them
-    for p in terrain_grid.dims().iter_within() {
-        let mut map: EnumMap<PlatformType, Option<Var>> = EnumMap::default();
-        for plat in enum_iterator::all::<PlatformType>() {
-            map[plat] = Some(instance.new_var()); // TODO
-        }
-
-        let var_1 = instance.new_var();
-        let var_3 = instance.new_var();
-        let var_5 = instance.new_var();
-        vars.platforms_1x1.insert(p, var_1);
-        vars.platforms_3x3.insert(p, var_3);
-        vars.platforms_5x5.insert(p, var_5);
-
-        // Implication clauses: larger => smaller
-        // A smaller platform is always to be entirely contained within the larger one
-        // Consequently, ~smaller => ~larger
-        // i.e. if you can't place a smaller platform, you can't place a larger one
-        // either
-        instance.add_lit_impl_lit(var_5.pos_lit(), var_3.pos_lit());
-        instance.add_lit_impl_lit(var_3.pos_lit(), var_1.pos_lit());
-    }
-
-    // Handle platform overlap
-    // Plain clauses, with stated ranges != (x, y):
-    //
-    // P5(x, y) -> ~P1(x..=x+4, y..=y+4)
-    // P5(x, y) -> ~P3(x-2..=x+4, y-2..=y+4)
-    // P5(x, y) -> ~P5(x-4..=x+4, y-4..=y+4)
-    //
-    // P3(x, y) -> ~P1(x..=x+2, y..=y+2)
-    // P3(x, y) -> ~P3(x-2..=x+2, y-2..=y+2)
-    // TODO: simplify via implications P5(x,y) -> P3(x,y) -> P1(x,y) etc.
-
-    // 5x5 <-> _
-    for (&p, &var_5x5) in vars.platforms_5x5.iter() {
-        // 5x5 <-> 1x1
-        for x in p.x..=(p.x + 4) {
-            for y in p.y..=(p.y + 4) {
-                let p_other = Point::new(x, y);
-                if p == p_other {
-                    continue;
-                }
-                let Some(var_1x1) = vars.platforms_1x1.get(&p_other).copied() else { continue };
-
-                instance.add_lit_impl_lit(var_5x5.pos_lit(), var_1x1.neg_lit());
-            }
-        }
-
-        // 5x5 <-> 3x3
-        for x in (p.x - 2)..=(p.x + 4) {
-            for y in (p.y - 2)..=(p.y + 4) {
-                let p_other = Point::new(x, y);
-                if p == p_other {
-                    continue;
-                }
-                let Some(var_3x3) = vars.platforms_3x3.get(&p_other).copied() else { continue };
-
-                instance.add_lit_impl_lit(var_5x5.pos_lit(), var_3x3.neg_lit());
-            }
-        }
-
-        // 5x5 <-> 5x5
-        for x in (p.x - 4)..=(p.x + 4) {
-            for y in (p.y - 4)..=(p.y + 4) {
-                let p_other = Point::new(x, y);
-                if p == p_other {
-                    continue;
-                }
-                let Some(var_5x5_b) = vars.platforms_5x5.get(&p_other).copied() else {
-                    continue;
-                };
-
-                instance.add_lit_impl_lit(var_5x5.pos_lit(), var_5x5_b.neg_lit());
-            }
-        }
-    }
-
-    // 3x3 <-> _
-    for (&p, &var_3x3) in vars.platforms_3x3.iter() {
-        // 3x3 <-> 1x1
-        for x in p.x..=(p.x + 2) {
-            for y in p.y..=(p.y + 2) {
-                let p_other = Point::new(x, y);
-                if p == p_other {
-                    continue;
-                }
-                let Some(var_1x1) = vars.platforms_1x1.get(&p_other).copied() else { continue };
-
-                instance.add_lit_impl_lit(var_3x3.pos_lit(), var_1x1.neg_lit());
-            }
-        }
-
-        // 3x3 <-> 3x3
-        for x in (p.x - 2)..=(p.x + 2) {
-            for y in (p.y - 2)..=(p.y + 2) {
-                let p_other = Point::new(x, y);
-                if p == p_other {
-                    continue;
-                }
-                let Some(var_3x3_b) = vars.platforms_3x3.get(&p_other).copied() else {
-                    continue;
-                };
-
-                instance.add_lit_impl_lit(var_3x3.pos_lit(), var_3x3_b.neg_lit());
-            }
-        }
-    }
-
-    // Terrain support goal clauses
-    // Terrain support distance is handled in "layers", like variables stacked on
-    // top of one another
-    // Tiles from each layer imply their neighbors in the next
-    // All tiles in the topmost layer are goals
-    // All tiles in the bottom-most layer are implied by
-    // the platforms supporting them
-
-    // New vars for all occupied spaces in the terrain grid
-    for p in terrain_grid.enumerate().filter_map(|(p, &v)| v.then_some(p)) {
-        vars.terrain_layers.insert(p, array::from_fn(|_| instance.new_var()));
-    }
-
-    for (p, layers) in &vars.terrain_layers {
-        // Layer implication clauses
-        for lower_i in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
-            let upper_i = lower_i + 1;
-
-            // Upper tile -> disjunction of tiles below (direct & neighbors)
-            // Equiv: conjunction of ~tiles below -> ~upper tile
-
-            let upper_tile = layers[upper_i].pos_lit();
-            let lower_tiles = p
-                .neighbors()
-                .iter()
-                .chain(once(p))
-                .filter_map(|q| vars.terrain_layers.get(q))
-                .map(|col| col[lower_i].pos_lit())
-                .collect::<Vec<_>>();
-
-            instance.add_lit_impl_clause(upper_tile, &lower_tiles);
-        }
-
-        // Require the topmost layer
-        instance.add_unit(layers.last().unwrap().pos_lit());
-
-        // Lowest tile -> disjunction of all platforms below
-        let mut platforms: Vec<Var> = Vec::new();
-
-        platforms.extend(vars.platforms_1x1.get(p));
-        for x in (p.x - 2)..=p.x {
-            for y in (p.y - 2)..=p.y {
-                let q = Point::new(x, y);
-                platforms.extend(vars.platforms_3x3.get(&q));
-            }
-        }
-        for x in (p.x - 4)..=p.x {
-            for y in (p.y - 4)..=p.y {
-                let q = Point::new(x, y);
-                platforms.extend(vars.platforms_5x5.get(&q));
-            }
-        }
-
-        instance.add_lit_impl_clause(
-            layers.first().unwrap().pos_lit(),
-            &platforms.iter().map(|v| v.pos_lit()).collect::<Vec<_>>(),
-        );
-    }
-
-    // instance.convert_to_cnf(); // Might not be needed?
-
-    vars
-}
-
 #[derive(Clone, Debug)]
 pub struct Solution {
-    platforms: HashMap<Point, PlatformType>,
+    platforms: HashMap<Point, Platform>,
 }
 
 impl Solution {
-    pub fn from_assignment(assignment: &Assignment, variables: &Variables) -> Self {
+    pub fn from_assignment(assignment: &Assignment, vars: &EncodingVars) -> Self {
         let mut platforms = HashMap::new();
 
-        for (&p, &var) in &variables.platforms_1x1 {
-            if assignment.var_value(var).to_bool_with_def(false) {
-                platforms.insert(p, PlatformType::Square1x1);
-            }
-        }
-        for (&p, &var) in &variables.platforms_3x3 {
-            if assignment.var_value(var).to_bool_with_def(false) {
-                platforms.insert(p, PlatformType::Square3x3);
-            }
-        }
-        for (&p, &var) in &variables.platforms_5x5 {
-            if assignment.var_value(var).to_bool_with_def(false) {
-                platforms.insert(p, PlatformType::Square5x5);
-            }
+        // iter() goes over all assigned literals (excl. DontCare)
+        for (lit, plat) in assignment
+            .iter()
+            .filter_map(|lit| Some((lit, lit.is_pos().then(|| vars.var_to_platform(lit.var()))??)))
+        {
+            platforms
+                .entry(plat.point())
+                .and_modify(|previous: &mut Platform| {
+                    if previous.def().dims() < plat.def().dims() {
+                        // Update only if larger
+                        *previous = plat;
+                    }
+                })
+                .or_insert(plat);
+
+            trace!(
+                target: "solution_lit",
+                "Active literal: {}", vars.lit_readable_name(lit).unwrap_or(format!("{lit:?}"))
+            );
+            trace!(target: "solution_lit", "=> {plat:?}");
         }
 
         Solution { platforms }
     }
 
-    pub fn platforms(&self) -> &HashMap<Point, PlatformType> {
+    pub fn platforms(&self) -> &HashMap<Point, Platform> {
         &self.platforms
     }
 
@@ -471,7 +225,7 @@ impl Solution {
     ///
     /// Platform types with 0 occurrences do not appear in the map, as indicated
     /// by the NonZero value type.
-    pub fn platform_stats(&self) -> HashMap<PlatformType, NonZero<usize>> {
+    pub fn platform_stats(&self) -> HashMap<PlatformDef, NonZero<usize>> {
         /// Since this is used only for this one folding operation, the addition
         /// simply panics on overflow, since we assume that there are no more
         /// than usize platforms for any given type.
@@ -479,13 +233,82 @@ impl Solution {
             *n = n.checked_add(1).unwrap();
         }
 
-        self.platforms().iter().fold(HashMap::new(), |mut map, (_, &ty)| {
-            map.entry(ty).and_modify(increment).or_insert(nz!(1));
+        self.platforms().iter().fold(HashMap::new(), |mut map, (_, &plat)| {
+            map.entry(plat.def()).and_modify(increment).or_insert(nz!(1));
             map
         })
     }
 
     pub fn get_platform(&self, p: Point) -> Option<Platform> {
-        self.platforms.get(&p).map(|t| Platform::new(p, *t))
+        self.platforms.get(&p).copied()
     }
+
+    pub fn validate(&self, world: &World) -> ValidationResult {
+        struct Tile<'a> {
+            terrain_supported: Option<bool>,
+            occupied_by: Option<&'a Platform>,
+        }
+
+        let mut overlapping_platforms: HashSet<Platform> = HashSet::new();
+
+        let mut tracking_grid = Grid::try_from_vec(
+            world.grid().dims(),
+            world
+                .grid()
+                .iter()
+                .map(|b| Tile { terrain_supported: b.then_some(false), occupied_by: None })
+                .collect_vec(),
+        )
+        .unwrap();
+
+        for (_, plat) in self.platforms.iter() {
+            for mut point in plat.dims().iter_within() {
+                point = point + plat.point();
+
+                if let Some(tile) = tracking_grid.get_mut(point) {
+                    if let Some(other) = tile.occupied_by {
+                        // Platform overlap!
+                        overlapping_platforms.insert(*plat);
+                        overlapping_platforms.insert(*other);
+                    } else {
+                        tile.occupied_by = Some(&plat);
+                    }
+                    // Only terrain can be supported
+                    if let Some(supported) = tile.terrain_supported.as_mut() {
+                        *supported = true;
+                    }
+                }
+            }
+        }
+
+        // Extend terrain support
+        for _ in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
+            let supported_set: HashSet<Point> = tracking_grid
+                .enumerate()
+                .filter_map(|(p, t)| t.terrain_supported.and_then(|b| b.then_some(p)))
+                .flat_map(Point::neighbors)
+                .collect();
+            for p in supported_set {
+                if let Some(tile) = tracking_grid.get_mut(p)
+                    && tile.terrain_supported.is_some()
+                {
+                    // Extend support only if there's terrain
+                    tile.terrain_supported = Some(true);
+                }
+            }
+        }
+
+        let unsupported_terrain = tracking_grid
+            .enumerate()
+            .filter_map(|(p, t)| (t.terrain_supported == Some(false)).then_some(p))
+            .collect();
+
+        ValidationResult { overlapping_platforms, unsupported_terrain }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ValidationResult {
+    pub unsupported_terrain: HashSet<Point>,
+    pub overlapping_platforms: HashSet<Platform>,
 }

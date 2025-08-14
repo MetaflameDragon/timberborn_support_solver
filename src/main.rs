@@ -2,36 +2,27 @@
 
 use std::{
     collections::HashMap,
-    ffi::OsStr,
     fs,
-    fs::File,
     io::Write,
     num::ParseIntError,
-    ops::ControlFlow,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, bail, ensure};
-use assertables::{assert_gt, assert_le};
-use clap::{
-    Arg, ArgAction, Command, CommandFactory, Error, FromArgMatches, Parser, Subcommand,
-    builder::{TypedValueParser, ValueParserFactory},
-    value_parser,
-};
-use log::{error, info, warn};
-use rustsat::solvers::InterruptSolver;
-use serde::Deserialize;
+use anyhow::{Context, bail};
+use clap::{CommandFactory, Parser, Subcommand};
+use itertools::Itertools;
+use log::{error, info, trace, warn};
+use owo_colors::OwoColorize;
 use thiserror::Error;
 use timberborn_support_solver::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
-    dimensions::{DimTy, Dimensions},
+    ValidationResult,
+    dimensions::Dimensions,
     grid::Grid,
-    platform::{Platform, PlatformType},
-    point::Point,
-    utils::loop_with_feedback,
-    world::{World, WorldGrid},
+    platform::{PLATFORMS_DEFAULT, PlatformDef},
+    platform_def,
+    world::World,
 };
 use tokio::select;
 use tokio_util::{future::FutureExt, sync::CancellationToken};
@@ -83,26 +74,35 @@ enum ReplCommand {
 #[derive(Error, Debug)]
 enum PlatformLimitError {
     #[error("duplicate limit for `{0}`")]
-    Duplicate(PlatformType),
+    Duplicate(PlatformDef),
+    #[error("no platform with dimensions `{w}x{h}` found", w = .0.width, h = .0.height)]
+    Unknown(Dimensions),
 }
 
 fn try_into_platform_limits(
     limit_args: Vec<PlatformLimitArg>,
+    dims_platform_map: &HashMap<Dimensions, PlatformDef>,
 ) -> Result<PlatformLimits, PlatformLimitError> {
     let mut map = HashMap::new();
-    for PlatformLimitArg(ty, count) in limit_args.into_iter() {
-        if map.insert(ty, count).is_some() {
+    for PlatformLimitArg(dims, count) in limit_args.into_iter() {
+        let def = *dims_platform_map.get(&dims).ok_or(PlatformLimitError::Unknown(dims))?;
+
+        if map.insert(def, count).is_some() {
             // Duplicate value
             // Maybe needs a better error type? it's just one error path for now though
-            return Err(PlatformLimitError::Duplicate(ty));
+            return Err(PlatformLimitError::Duplicate(def));
         }
     }
 
     Ok(PlatformLimits::new(map))
 }
 
+/// Note: describes limits for _dimensions_, not the platform defs themselves.
+/// Platform defs are uniquely identified by their dimensions in the solver, and
+/// the CLI accepts dimensions rather than particular platform defs, so this
+/// mapping has to be resolved after parsing.
 #[derive(Clone, Debug)]
-struct PlatformLimitArg(PlatformType, usize);
+struct PlatformLimitArg(Dimensions, usize);
 
 #[derive(Error, Debug)]
 enum PlatformLimitArgParseError {
@@ -120,16 +120,21 @@ impl FromStr for PlatformLimitArg {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use PlatformLimitArgParseError as Error;
         let (key, value) = s.split_once(':').ok_or(Error::MissingDelimiter)?;
-        let r#type = match key.trim() {
-            "5" => PlatformType::Square5x5,
-            "3" => PlatformType::Square3x3,
-            "1" => PlatformType::Square1x1,
-            other => return Err(Error::InvalidType(other.to_string())),
+        let dims = if let Some((a, b)) = key.split_once('x') {
+            // Try (a)x(b)
+            Dimensions::new(
+                a.parse().map_err(Error::InvalidValue)?,
+                b.parse().map_err(Error::InvalidValue)?,
+            )
+        } else {
+            // Assume (a)x(a)
+            let size: usize = key.parse().map_err(Error::InvalidValue)?;
+            Dimensions::new(size, size)
         };
 
-        let count: usize = value.trim().parse().map_err(|err| Error::InvalidValue(err))?;
+        let count: usize = value.trim().parse().map_err(Error::InvalidValue)?;
 
-        Ok(PlatformLimitArg(r#type, count))
+        Ok(PlatformLimitArg(dims, count))
     }
 }
 
@@ -163,19 +168,28 @@ async fn repl_loop() -> anyhow::Result<()> {
 
     struct State {
         loaded_project: Option<LoadedProject>,
+        dims_platform_map: HashMap<Dimensions, PlatformDef>,
     }
 
     struct LoadedProject {
         project: Project,
         path: PathBuf,
     }
-    let mut state = State { loaded_project: None };
+
+    let dims_platform_map: HashMap<Dimensions, PlatformDef> = {
+        timberborn_support_solver::encoder::dims_platform_map(&PLATFORMS_DEFAULT)
+            .into_iter()
+            .map(|(k, v)| (k, *v.iter().next().unwrap()))
+            .collect()
+    };
+
+    let mut state = State { loaded_project: None, dims_platform_map };
 
     loop {
         if let Some(LoadedProject { project: _project, path }) = &state.loaded_project {
             // Try to show just the file name, fall back to the whole path
             let proj_path_str = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
-            info!("Currently loaded project: {}", proj_path_str);
+            println!("Currently loaded project: {proj_path_str}");
         };
 
         let cli = match parse_repl() {
@@ -185,7 +199,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 continue;
             }
             Err(err) => {
-                print!("{}", err.to_string());
+                print!("{}", err);
                 continue;
             }
         };
@@ -196,7 +210,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         }
 
         if let Err(err) = run_cmd(cmd, &mut state).await {
-            error!("{}", err.to_string());
+            error!("{}", err);
         }
     }
 
@@ -204,7 +218,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         match cmd {
             ReplCommand::Load { path } => {
                 state.loaded_project = Some(LoadedProject { project: load_project(&path)?, path });
-                info!("Loaded");
+                println!("Loaded");
 
                 Ok(())
             }
@@ -214,8 +228,8 @@ async fn repl_loop() -> anyhow::Result<()> {
                 };
 
                 state.loaded_project =
-                    Some(LoadedProject { project: load_project(&path)?, path: path.clone() });
-                info!("Loaded");
+                    Some(LoadedProject { project: load_project(path)?, path: path.clone() });
+                println!("Loaded");
 
                 Ok(())
             }
@@ -224,12 +238,12 @@ async fn repl_loop() -> anyhow::Result<()> {
                     bail!("No project loaded");
                 };
 
-                print_world(&project.world, None);
+                print_world(&project.world, None, &Default::default());
 
                 Ok(())
             }
             ReplCommand::Solve { limits } => {
-                let limits = try_into_platform_limits(limits)?;
+                let limits = try_into_platform_limits(limits, &state.dims_platform_map)?;
                 let Some(LoadedProject { project, .. }) = &state.loaded_project else {
                     bail!("No project loaded");
                 };
@@ -238,13 +252,13 @@ async fn repl_loop() -> anyhow::Result<()> {
                 let run_config = SolverRunConfig { limits };
 
                 let res = select! {
-                    res = run_solver(&project, solver, run_config) => {res},
+                    res = run_solver(project, solver, run_config) => {res},
 
                 };
                 if let Err(err) = res {
                     bail!("Error while solving: {}", err.to_string());
                 }
-                info!("Done");
+                println!("Done");
 
                 Ok(())
             }
@@ -284,7 +298,7 @@ async fn run_solver(
         tokio::spawn({
             let cancel = ctrl_c_cancellation.clone();
             async move {
-                info!("Interrupt listener ready");
+                trace!(target: "solver_interrupter", "Interrupt listener ready");
                 // TODO: better ctrl-c/interrupt handling
                 // Example: on unix, this listener will continue to capture SIGINT even after
                 // going out of scope, which might eat further SIGINTs if the program gets stuck
@@ -295,14 +309,14 @@ async fn run_solver(
 
                 match tokio::signal::ctrl_c().with_cancellation_token_owned(cancel).await {
                     None => {
-                        info!("Interrupt listener canceled");
+                        trace!(target: "solver_interrupter", "Interrupt listener canceled");
                     }
                     Some(Ok(())) => {
-                        info!("Calling interrupt");
+                        println!("Aborting...");
                         interrupter.interrupt();
                     }
                     Some(Err(err)) => {
-                        error!("Interrupt listener error: {}", err);
+                        error!("Interrupt listener error: {err}");
                     }
                 }
             }
@@ -312,29 +326,65 @@ async fn run_solver(
         let sol = match solver_future.future().await? {
             SolverResponse::Sat(sol) => sol,
             SolverResponse::Unsat => {
-                info!("No solution found for the current constraints");
+                println!("No solution found for the current constraints");
                 return Ok(());
             }
             SolverResponse::Aborted => {
-                info!("Aborted");
+                println!("Solver aborted");
                 return Ok(());
             }
         };
 
         if sol.platform_count() == 0 {
-            info!("Found a solution with no platforms - aborting");
+            println!("Found a solution with no platforms - aborting");
             return Ok(());
         }
-        // assert_gt!(sol.platform_count(), 0, "Solution should have at least one
-        // platform");
-        run_config.limits_mut().insert(PlatformType::Square1x1, sol.platform_count() - 1);
 
-        info!("Solution found ({} platforms total)", sol.platform_count());
+        run_config.limits_mut().entry(platform_def!(1, 1)).insert_entry(sol.platform_count() - 1);
+
+        println!("Solution found ({} platforms total)", sol.platform_count());
         let platform_stats = sol.platform_stats();
-        for (ty, count) in platform_stats.iter() {
-            info!("{}: {}", ty.dimensions_str(), count);
+        for (def, count) in platform_stats.iter() {
+            println!("{}: {}", def.dimensions_str(), count);
         }
-        print_world(&project.world, Some(&sol));
+        let validation = sol.validate(&project.world);
+        if validation.overlapping_platforms.is_empty() && validation.unsupported_terrain.is_empty()
+        {
+            info!("Solution validation OK");
+        } else {
+            if !validation.overlapping_platforms.is_empty() {
+                warn!(
+                    "Validation failed: overlapping platforms:\n{}",
+                    validation
+                        .overlapping_platforms
+                        .iter()
+                        .map(|plat| format!(
+                            "{}x{} at ({:>3};{:>3})",
+                            plat.dims().width,
+                            plat.dims().height,
+                            plat.point().x,
+                            plat.point().y
+                        ))
+                        .join("\n")
+                );
+            }
+
+            if !validation.unsupported_terrain.is_empty() {
+                warn!(
+                    "Validation failed: Unsupported terrain:\n{}",
+                    validation
+                        .unsupported_terrain
+                        .iter()
+                        .map(|point| format!("({:>3};{:>3})", point.x, point.y))
+                        .chunks(10)
+                        .into_iter()
+                        .map(|mut chunk| chunk.join(", "))
+                        .join("\n")
+                );
+            }
+        }
+
+        print_world(&project.world, Some(&sol), &validation);
     }
 }
 
@@ -360,41 +410,103 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_world(world: &World, solution: Option<&Solution>) {
+fn print_world(world: &World, solution: Option<&Solution>, validation: &ValidationResult) {
     let terrain_grid = world.grid();
     let dims = terrain_grid.dims();
 
-    let mut char_grid = Grid::new_fill(dims, ' ');
+    #[derive(Copy, Clone, Debug)]
+    enum Tile {
+        Empty,
+        Terrain { unsupported: bool },
+        Platform(PlatformTile),
+    }
+
+    #[derive(Copy, Clone, Debug)]
+    struct PlatformTile {
+        north_edge: bool,
+        south_edge: bool,
+        west_edge: bool,
+        east_edge: bool,
+        overlapping: bool,
+    }
+
+    let mut tile_grid = Grid::new_fill(dims, Tile::Empty);
 
     for p in terrain_grid.enumerate().filter_map(|(p, val)| val.then_some(p)) {
-        char_grid.set(p, block_char::MEDIUM_SHADE).unwrap();
+        tile_grid
+            .set(p, Tile::Terrain { unsupported: validation.unsupported_terrain.contains(&p) })
+            .unwrap();
     }
 
     if let Some(solution) = solution {
-        for (point, platform) in solution.platforms() {
-            let platform = Platform::new(*point, *platform);
-            let (lower, upper) = platform.area_corners();
+        for platform in solution.platforms().values() {
+            let offset = platform.point();
 
-            let fill = match platform.platform_type() {
-                PlatformType::Square1x1 => '1',
-                PlatformType::Square3x3 => '3',
-                PlatformType::Square5x5 => '5',
-                _ => todo!(),
-            };
-
-            for y in lower.y..=upper.y {
-                for x in lower.x..=upper.x {
-                    let q = Point::new(x, y);
-                    // Pass if out of bounds
-                    _ = char_grid.set(q, fill);
-                }
+            let dims = platform.dims();
+            for rel_point in dims.iter_within() {
+                let tile = PlatformTile {
+                    north_edge: rel_point.y == 0,
+                    south_edge: rel_point.y == (dims.height - 1) as isize,
+                    west_edge: rel_point.x == 0,
+                    east_edge: rel_point.x == (dims.width - 1) as isize,
+                    overlapping: validation.overlapping_platforms.contains(platform),
+                };
+                // Pass if out of bounds
+                _ = tile_grid.set(rel_point + offset, Tile::Platform(tile));
             }
         }
     }
 
-    for row in char_grid.iter_rows() {
-        for c in row {
-            print!("{}  ", c);
+    let fill_platform_middle = false;
+
+    for row in tile_grid.iter_rows() {
+        for t in row {
+            let tile_str = match *t {
+                Tile::Empty => " ".to_string(),
+                Tile::Terrain { unsupported } => {
+                    let out = block_char::MEDIUM_SHADE.to_string();
+                    if unsupported { out.yellow().to_string() } else { out }
+                }
+                Tile::Platform(PlatformTile {
+                    north_edge: mut n,
+                    south_edge: mut s,
+                    west_edge: mut w,
+                    east_edge: mut e,
+                    overlapping,
+                }) => {
+                    // NSWE are true if there's _empty space_ in that direction
+                    // The box chars function expects the opposite - where to connect to
+
+                    // TODO Probably clean this up somehow
+                    // Special case for 1x1
+                    let out = if n && s && w && e {
+                        '☐'.to_string()
+                    } else {
+                        // If only the middle should be filled, make it draw only the outline
+                        if !fill_platform_middle {
+                            match (n, s, w, e) {
+                                (false, false, false, false) => {
+                                    // Internal tile - make it empty instead
+                                    (n, s, w, e) = (true, true, true, true);
+                                }
+                                (false, false, _, _) => {
+                                    // NS connected - discard WE
+                                    (w, e) = (true, true);
+                                }
+                                (_, _, false, false) => {
+                                    // WE connected - discard NS
+                                    (n, s) = (true, true);
+                                }
+                                _ => {}
+                            };
+                        }
+                        box_char::by_adjacency_nswe(!n, !s, !w, !e).to_string()
+                    };
+
+                    if overlapping { out.red().to_string() } else { out }
+                }
+            };
+            print!("{tile_str}  ");
         }
         println!();
     }
@@ -429,4 +541,32 @@ mod block_char {
     pub const FULL: char = '\u{2588}';
     pub const LIGHT_SHADE: char = '\u{2591}';
     pub const MEDIUM_SHADE: char = '\u{2592}';
+}
+
+mod box_char {
+    const CHARS: [char; 16] = [
+        // Order: NSWE, E is LSb
+        ' ', // none
+        '╶', // E
+        '╴', // W
+        '─', // WE
+        '╷', // S
+        '┌', // SE
+        '┐', // SW
+        '┬', // SWE
+        '╵', // N
+        '└', // NE
+        '┘', // NW
+        '┴', // NWE
+        '│', // NS
+        '├', // NSE
+        '┤', // NSW
+        '┼', // NSWE
+    ];
+
+    pub const fn by_adjacency_nswe(north: bool, south: bool, west: bool, east: bool) -> char {
+        let index =
+            (north as usize) << 3 | (south as usize) << 2 | (west as usize) << 1 | (east as usize);
+        CHARS[index]
+    }
 }

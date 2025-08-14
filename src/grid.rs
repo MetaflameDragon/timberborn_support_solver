@@ -1,9 +1,8 @@
 use std::ops::Div;
+
 use serde::{Deserialize, Serialize};
-use crate::{
-    dimensions::Dimensions,
-    point::{Point, PointTy},
-};
+
+use crate::{dimensions::Dimensions, point::Point};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid<T> {
@@ -17,12 +16,15 @@ impl<T> Grid<T> {
     }
 
     pub fn iter_rows(&self) -> impl Iterator<Item = &[T]> {
-        debug_assert_eq!(self.data.len() % self.dims.width as usize, 0);
-        self.data.chunks_exact(self.dims.width as usize)
+        debug_assert_eq!(self.data.len() % self.dims.width, 0);
+        self.data.chunks_exact(self.dims.width)
     }
 
-    pub fn from_map(dims: Dimensions, map_fn: impl Fn(Point) -> T) -> Self {
-        Grid { data: dims.iter_within().map(&map_fn).collect(), dims }
+    pub fn from_fn<F>(dims: Dimensions, map_fn: F) -> Self
+    where
+        F: FnMut(Point) -> T,
+    {
+        Grid { data: dims.iter_within().map(map_fn).collect(), dims }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -48,20 +50,15 @@ impl<T> Grid<T> {
     }
 
     fn data_index(&self, point: Point) -> Option<usize> {
-        self.dims
-            .contains(point)
-            .then_some(point.x as usize + (point.y as usize * self.dims.width as usize))
+        self.dims.contains(point).then(|| point.x as usize + (point.y as usize * self.dims.width))
     }
 
     fn index_to_point(&self, index: usize) -> Point {
-        Point::new(
-            (index % self.dims.width as usize) as PointTy,
-            index.div(self.dims.width as usize) as PointTy,
-        )
+        Point::new((index % self.dims.width) as isize, index.div(self.dims.width) as isize)
     }
 
     pub fn try_from_vec(dims: Dimensions, data: Vec<T>) -> Option<Self> {
-        if dims.width as usize * dims.height as usize != data.len() {
+        if dims.width * dims.height != data.len() {
             return None;
         }
         Some(Grid { data, dims })
@@ -79,6 +76,6 @@ impl<T: Clone> Grid<T> {
         let Some(flat_size) = dims.width.checked_mul(dims.height) else {
             panic!("Dimensions too large! {}*{} would overflow", dims.width, dims.height);
         };
-        Grid { data: vec![value; flat_size as usize], dims }
+        Grid { data: vec![value; flat_size], dims }
     }
 }

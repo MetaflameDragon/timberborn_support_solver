@@ -10,14 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::grid::Grid;
 // The math is a mess but whatever
 
-pub type PointTy = isize;
-
 #[derive(Debug, Copy, Clone, Default)]
 #[derive(PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[derive(Serialize, Deserialize)]
 pub struct Point {
-    pub x: PointTy,
-    pub y: PointTy,
+    pub x: isize,
+    pub y: isize,
 }
 
 impl Display for Point {
@@ -27,12 +25,12 @@ impl Display for Point {
 }
 
 impl Point {
-    pub const fn new(x: PointTy, y: PointTy) -> Self {
+    pub const fn new(x: isize, y: isize) -> Self {
         Point { x, y }
     }
 
     pub const fn manhattan_mag(self) -> usize {
-        self.x.unsigned_abs() as usize + self.y.unsigned_abs() as usize
+        self.x.unsigned_abs() + self.y.unsigned_abs()
     }
 
     pub const fn abs(self) -> Self {
@@ -124,9 +122,9 @@ impl Sub for Point {
     }
 }
 
-impl Mul<PointTy> for Point {
+impl Mul<isize> for Point {
     type Output = Point;
-    fn mul(self, rhs: PointTy) -> Point {
+    fn mul(self, rhs: isize) -> Point {
         Point::new(self.x * rhs, self.y * rhs)
     }
 }
@@ -139,7 +137,7 @@ pub struct IterManhattan {
 
 impl IterManhattan {
     pub const fn new(center: Point, dist: usize) -> Self {
-        IterManhattan { center, dist, iter_point_rel: Point::new(0, -(dist as PointTy)) }
+        IterManhattan { center, dist, iter_point_rel: Point::new(0, -(dist as isize)) }
     }
 }
 
@@ -148,7 +146,7 @@ impl Iterator for IterManhattan {
     fn next(&mut self) -> Option<Self::Item> {
         // Going from bottom to top
         // If past the top, the iterator is done
-        if self.iter_point_rel.y > self.dist as PointTy {
+        if self.iter_point_rel.y > self.dist as isize {
             return None;
         }
 
@@ -159,7 +157,7 @@ impl Iterator for IterManhattan {
         self.iter_point_rel.x += 1;
         if self.iter_point_rel.manhattan_mag() > self.dist {
             self.iter_point_rel.y += 1;
-            self.iter_point_rel.x = -(self.dist as PointTy - self.iter_point_rel.y.abs());
+            self.iter_point_rel.x = -(self.dist as isize - self.iter_point_rel.y.abs());
         }
 
         Some(val)
