@@ -301,6 +301,10 @@ impl EncodingVars {
             }
         })
     }
+
+    pub fn iter_by_points(&self) -> impl Iterator<Item = &EncodingTileVars> {
+        self.grid.iter()
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]

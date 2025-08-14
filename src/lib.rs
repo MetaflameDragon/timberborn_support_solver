@@ -3,11 +3,12 @@ use std::{collections::HashMap, num::NonZero};
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
 use futures::{FutureExt, TryFutureExt};
+use itertools::Itertools;
 use log::trace;
 use new_zealand::nz;
 use rustsat::{
     encodings::{card, card::Totalizer},
-    instances::{BasicVarManager, SatInstance},
+    instances::{BasicVarManager, ManageVars, SatInstance},
     solvers::{Interrupt, InterruptSolver, Solve},
     types::{Assignment, constraints::CardConstraint},
 };
@@ -98,37 +99,27 @@ impl SolverConfig {
         sat_solver.add_cnf(cnf).context("Failed to add CNF")?;
 
         for (&platform_type, &limit) in cfg.limits().iter() {
-            // TODO: Actually encode limits for other platforms
-            // TODO: Clarify what the encoding means
-            // The cardinality constraints still work in terms of "platform
-            // promotion", where smaller platforms "promote" to
-            // larger ones, and the vars for larger ones imply all
-            // their predecessors. This means that limiting 5x5 to
-            // <= 2 and 3x3 to <= 4 actually means "at most 4 of 3x3
-            // or larger, and at most 2 of 5x5". info!("Limiting {}
-            // platforms to n <= {}", platform_type, limit);
-            // let upper_constraint = CardConstraint::new_ub(
-            //     vars.platform_vars_map(platform_type).values().map(|var|
-            // var.pos_lit()),     limit,
-            // );
-            //
-            // card::encode_cardinality_constraint::<Totalizer, _>(
-            //     upper_constraint,
-            //     &mut sat_solver,
-            //     &mut var_manager,
-            // )
-            // .context("failed to encode cardinality constraint")?;
-        }
-
-        // TODO: Temporary 1x1-only limiter
-        if let (platform_type, Some(&limit)) =
-            (PLATFORMS_DEFAULT[0], cfg.limits().get(&PLATFORMS_DEFAULT[0]))
-        {
             println!("Limiting {platform_type} platforms to n <= {limit}");
-            let upper_constraint = CardConstraint::new_ub(
-                vars.iter_dims_vars(platform_type.dims()).unwrap().map(|var| var.pos_lit()),
-                limit,
-            );
+            let upper_constraint = if platform_type.rectangular() {
+                let mut limit_vars = vec![];
+                for tile_vars in vars.iter_by_points() {
+                    let limit_var = var_manager.new_var();
+                    limit_vars.push(limit_var);
+                    for var in [platform_type.dims(), platform_type.dims().flipped()]
+                        .iter()
+                        .filter_map(|d| tile_vars.for_dims(*d))
+                    {
+                        sat_solver.add_binary(var.neg_lit(), limit_var.pos_lit())?;
+                    }
+                }
+
+                CardConstraint::new_ub(limit_vars.iter().map(|var| var.pos_lit()), limit)
+            } else {
+                CardConstraint::new_ub(
+                    vars.iter_dims_vars(platform_type.dims()).unwrap().map(|var| var.pos_lit()),
+                    limit,
+                )
+            };
 
             card::encode_cardinality_constraint::<Totalizer, _>(
                 upper_constraint,
