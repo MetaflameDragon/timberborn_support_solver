@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
+    ops::Not,
 };
 
 use anyhow::{Context, anyhow};
@@ -250,6 +251,7 @@ impl Solution {
         }
 
         let mut overlapping_platforms: HashSet<Platform> = HashSet::new();
+        let mut out_of_bounds_platforms: HashSet<Platform> = HashSet::new();
 
         let mut tracking_grid = Grid::try_from_vec(
             world.grid().dims(),
@@ -262,8 +264,8 @@ impl Solution {
         .unwrap();
 
         for (_, plat) in self.platforms.iter() {
-            for mut point in plat.dims().iter_within() {
-                point = point + plat.point();
+            for offset in plat.dims().iter_within() {
+                let point = offset + plat.point();
 
                 if let Some(tile) = tracking_grid.get_mut(point) {
                     if let Some(other) = tile.occupied_by {
@@ -277,6 +279,8 @@ impl Solution {
                     if let Some(supported) = tile.terrain_supported.as_mut() {
                         *supported = true;
                     }
+                } else {
+                    out_of_bounds_platforms.insert(*plat);
                 }
             }
         }
@@ -303,7 +307,7 @@ impl Solution {
             .filter_map(|(p, t)| (t.terrain_supported == Some(false)).then_some(p))
             .collect();
 
-        ValidationResult { overlapping_platforms, unsupported_terrain }
+        ValidationResult { overlapping_platforms, unsupported_terrain, out_of_bounds_platforms }
     }
 }
 
@@ -311,4 +315,52 @@ impl Solution {
 pub struct ValidationResult {
     pub unsupported_terrain: HashSet<Point>,
     pub overlapping_platforms: HashSet<Platform>,
+    pub out_of_bounds_platforms: HashSet<Platform>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidationErrorPrintout {
+    pub header: String,
+    pub items: Vec<String>,
+}
+
+impl ValidationResult {
+    pub fn is_valid(&self) -> bool {
+        self.unsupported_terrain.is_empty()
+            && self.overlapping_platforms.is_empty()
+            && self.out_of_bounds_platforms.is_empty()
+    }
+
+    pub fn iter_error_printouts(&self) -> impl Iterator<Item = ValidationErrorPrintout> {
+        fn format_platform(plat: &Platform) -> String {
+            format!(
+                "{}x{} at ({:>3};{:>3})",
+                plat.dims().width,
+                plat.dims().height,
+                plat.point().x,
+                plat.point().y
+            )
+        }
+
+        [
+            self.unsupported_terrain.is_empty().not().then_some(ValidationErrorPrintout {
+                header: "unsupported terrain".to_string(),
+                items: self
+                    .unsupported_terrain
+                    .iter()
+                    .map(|point| format!("({:>3};{:>3})", point.x, point.y))
+                    .collect(),
+            }),
+            self.overlapping_platforms.is_empty().not().then_some(ValidationErrorPrintout {
+                header: "overlapping platforms".to_string(),
+                items: self.overlapping_platforms.iter().map(format_platform).collect(),
+            }),
+            self.out_of_bounds_platforms.is_empty().not().then_some(ValidationErrorPrintout {
+                header: "out-of-bounds platforms".to_string(),
+                items: self.out_of_bounds_platforms.iter().map(format_platform).collect(),
+            }),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
