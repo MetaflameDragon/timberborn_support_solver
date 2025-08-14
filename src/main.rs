@@ -421,7 +421,7 @@ fn print_world(world: &World, solution: Option<&Solution>, validation: &Validati
     #[derive(Copy, Clone, Debug)]
     enum Tile {
         Empty,
-        Terrain,
+        Terrain { unsupported: bool },
         Platform(PlatformTile),
     }
 
@@ -437,7 +437,9 @@ fn print_world(world: &World, solution: Option<&Solution>, validation: &Validati
     let mut tile_grid = Grid::new_fill(dims, Tile::Empty);
 
     for p in terrain_grid.enumerate().filter_map(|(p, val)| val.then_some(p)) {
-        tile_grid.set(p, Tile::Terrain).unwrap();
+        tile_grid
+            .set(p, Tile::Terrain { unsupported: validation.unsupported_terrain.contains(&p) })
+            .unwrap();
     }
 
     if let Some(solution) = solution {
@@ -465,7 +467,10 @@ fn print_world(world: &World, solution: Option<&Solution>, validation: &Validati
         for t in row {
             let tile_str = match *t {
                 Tile::Empty => " ".to_string(),
-                Tile::Terrain => block_char::MEDIUM_SHADE.to_string(),
+                Tile::Terrain { unsupported } => {
+                    let out = block_char::MEDIUM_SHADE.to_string();
+                    if unsupported { out.yellow().to_string() } else { out }
+                }
                 Tile::Platform(PlatformTile {
                     north_edge: mut n,
                     south_edge: mut s,
