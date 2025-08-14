@@ -319,7 +319,7 @@ impl Solution {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ValidationResult {
     pub unsupported_terrain: HashSet<Point>,
     pub overlapping_platforms: HashSet<Platform>,

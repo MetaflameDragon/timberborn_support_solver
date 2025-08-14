@@ -16,6 +16,7 @@ use clap::{
 };
 use itertools::Itertools;
 use log::{error, info, trace, warn};
+use owo_colors::OwoColorize;
 use rustsat::solvers::InterruptSolver;
 use thiserror::Error;
 use timberborn_support_solver::{
@@ -240,7 +241,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                     bail!("No project loaded");
                 };
 
-                print_world(&project.world, None);
+                print_world(&project.world, None, &Default::default());
 
                 Ok(())
             }
@@ -387,7 +388,7 @@ async fn run_solver(
             }
         }
 
-        print_world(&project.world, Some(&sol));
+        print_world(&project.world, Some(&sol), &validation);
     }
 }
 
@@ -413,7 +414,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_world(world: &World, solution: Option<&Solution>) {
+fn print_world(world: &World, solution: Option<&Solution>, validation: &ValidationResult) {
     let terrain_grid = world.grid();
     let dims = terrain_grid.dims();
 
@@ -430,6 +431,7 @@ fn print_world(world: &World, solution: Option<&Solution>) {
         south_edge: bool,
         west_edge: bool,
         east_edge: bool,
+        overlapping: bool,
     }
 
     let mut tile_grid = Grid::new_fill(dims, Tile::Empty);
@@ -449,6 +451,7 @@ fn print_world(world: &World, solution: Option<&Solution>) {
                     south_edge: rel_point.y == (dims.height - 1) as isize,
                     west_edge: rel_point.x == 0,
                     east_edge: rel_point.x == (dims.width - 1) as isize,
+                    overlapping: validation.overlapping_platforms.contains(platform),
                 };
                 // Pass if out of bounds
                 _ = tile_grid.set(rel_point + offset, Tile::Platform(tile));
@@ -461,21 +464,22 @@ fn print_world(world: &World, solution: Option<&Solution>) {
     for row in tile_grid.iter_rows() {
         for t in row {
             let tile_str = match *t {
-                Tile::Empty => " ",
-                Tile::Terrain => &block_char::MEDIUM_SHADE.to_string(),
+                Tile::Empty => " ".to_string(),
+                Tile::Terrain => block_char::MEDIUM_SHADE.to_string(),
                 Tile::Platform(PlatformTile {
                     north_edge: mut n,
                     south_edge: mut s,
                     west_edge: mut w,
                     east_edge: mut e,
+                    overlapping,
                 }) => {
                     // NSWE are true if there's _empty space_ in that direction
                     // The box chars function expects the opposite - where to connect to
 
                     // TODO Probably clean this up somehow
                     // Special case for 1x1
-                    if n && s && w && e {
-                        &'☐'.to_string()
+                    let out = if n && s && w && e {
+                        '☐'.to_string()
                     } else {
                         // If only the middle should be filled, make it draw only the outline
                         if !fill_platform_middle {
@@ -495,8 +499,10 @@ fn print_world(world: &World, solution: Option<&Solution>) {
                                 _ => {}
                             };
                         }
-                        &box_char::by_adjacency_nswe(!n, !s, !w, !e).to_string()
-                    }
+                        box_char::by_adjacency_nswe(!n, !s, !w, !e).to_string()
+                    };
+
+                    if overlapping { out.red().to_string() } else { out }
                 }
             };
             print!("{tile_str}  ");
