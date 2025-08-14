@@ -433,25 +433,31 @@ fn print_world(world: &World, solution: Option<&Solution>) {
                     // NSWE are true if there's _empty space_ in that direction
                     // The box chars function expects the opposite - where to connect to
 
-                    // If only the middle should be filled, make it draw only the outline
-                    if !fill_platform_middle {
-                        match (n, s, w, e) {
-                            (false, false, false, false) => {
-                                // Internal tile - make it empty instead
-                                (n, s, w, e) = (true, true, true, true);
-                            }
-                            (false, false, _, _) => {
-                                // NS connected - discard WE
-                                (w, e) = (true, true);
-                            }
-                            (_, _, false, false) => {
-                                // WE connected - discard NS
-                                (n, s) = (true, true);
-                            }
-                            _ => {}
-                        };
+                    // TODO Probably clean this up somehow
+                    // Special case for 1x1
+                    if n && s && w && e {
+                        &'☐'.to_string()
+                    } else {
+                        // If only the middle should be filled, make it draw only the outline
+                        if !fill_platform_middle {
+                            match (n, s, w, e) {
+                                (false, false, false, false) => {
+                                    // Internal tile - make it empty instead
+                                    (n, s, w, e) = (true, true, true, true);
+                                }
+                                (false, false, _, _) => {
+                                    // NS connected - discard WE
+                                    (w, e) = (true, true);
+                                }
+                                (_, _, false, false) => {
+                                    // WE connected - discard NS
+                                    (n, s) = (true, true);
+                                }
+                                _ => {}
+                            };
+                        }
+                        &box_char::by_adjacency_nswe(!n, !s, !w, !e).to_string()
                     }
-                    &box_char::by_adjacency_nswe(!n, !s, !w, !e).to_string()
                 }
             };
             print!("{tile_str}  ");
