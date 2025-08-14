@@ -115,6 +115,7 @@ impl Platform {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! platform {
     (1x1 @ $x:literal, $y:literal) => {
         Platform::new(Point::new($x, $y), platform_def!(1, 1))

@@ -543,8 +543,7 @@ pub fn encode(
                 .chain(iter::once(point_terrain))
                 .collect();
             // Add for all layers, i -> j for i + 1 = j
-            for i in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
-                let j = i + 1;
+            for (i, j) in (0..TERRAIN_SUPPORT_DISTANCE).tuple_windows() {
                 // heights: i -> j
                 // Starts at 0 going down
                 // TERRAIN_SUPPORT_DISTANCE-1 is closest to platforms

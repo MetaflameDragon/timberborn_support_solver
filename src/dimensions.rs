@@ -115,9 +115,7 @@ impl PartialOrd for Dimensions {
 
 impl Hash for Dimensions {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        if self.empty() {
-            ().hash(state);
-        } else {
+        if !self.empty() {
             self.width.hash(state);
             self.height.hash(state);
         }

@@ -10,14 +10,10 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use clap::{
-    CommandFactory, FromArgMatches, Parser, Subcommand,
-    builder::{TypedValueParser, ValueParserFactory},
-};
+use clap::{CommandFactory, Parser, Subcommand};
 use itertools::Itertools;
 use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
-use rustsat::solvers::InterruptSolver;
 use thiserror::Error;
 use timberborn_support_solver::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,

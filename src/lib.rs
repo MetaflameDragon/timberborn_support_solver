@@ -1,12 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
-    ops::Not,
 };
 
 use anyhow::{Context, anyhow};
 use derive_more::{Deref, DerefMut};
-use futures::{FutureExt, TryFutureExt};
+use futures::TryFutureExt;
 use itertools::Itertools;
 use log::trace;
 use new_zealand::nz;
@@ -250,12 +249,6 @@ impl Solution {
     }
 
     pub fn validate(&self, world: &World) -> ValidationResult {
-        enum TerrainState {
-            None,
-            Unsupported,
-            Supported,
-        }
-
         struct Tile<'a> {
             terrain_supported: Option<bool>,
             occupied_by: Option<&'a Platform>,
@@ -280,8 +273,8 @@ impl Solution {
                 if let Some(tile) = tracking_grid.get_mut(point) {
                     if let Some(other) = tile.occupied_by {
                         // Platform overlap!
-                        overlapping_platforms.insert(plat.clone());
-                        overlapping_platforms.insert(other.clone());
+                        overlapping_platforms.insert(*plat);
+                        overlapping_platforms.insert(*other);
                     } else {
                         tile.occupied_by = Some(&plat);
                     }
