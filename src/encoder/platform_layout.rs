@@ -112,7 +112,7 @@ impl PlatformLayout {
                         overlapping_platforms.insert(*plat);
                         overlapping_platforms.insert(*other);
                     } else {
-                        tile.occupied_by = Some(&plat);
+                        tile.occupied_by = Some(plat);
                     }
                     // Only terrain can be supported
                     if let Some(supported) = tile.terrain_supported.as_mut() {

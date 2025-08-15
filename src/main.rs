@@ -203,7 +203,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                 continue;
             }
             Err(err) => {
-                print!("{}", err);
+                print!("{err}");
                 continue;
             }
         };
@@ -214,7 +214,7 @@ async fn repl_loop() -> anyhow::Result<()> {
         }
 
         if let Err(err) = run_cmd(cmd, &mut state).await {
-            error!("{}", err);
+            error!("{err}");
         }
     }
 
