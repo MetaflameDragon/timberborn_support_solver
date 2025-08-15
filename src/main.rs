@@ -16,8 +16,8 @@ use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
 use thiserror::Error;
 use timberborn_platform_cruncher::{
-    PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
-    ValidationResult, encoder,
+    Project, SolverConfig, SolverResponse, SolverRunConfig, encoder,
+    encoder::{PlatformLayout, PlatformLimits, ValidationResult},
     grid::Grid,
     math::Dimensions,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
@@ -383,7 +383,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_world(world: &World, solution: Option<&Solution>, validation: &ValidationResult) {
+fn print_world(world: &World, solution: Option<&PlatformLayout>, validation: &ValidationResult) {
     let terrain_grid = world.grid();
     let dims = terrain_grid.dims();
 

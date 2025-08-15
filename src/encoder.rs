@@ -80,13 +80,12 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    fmt::{Debug, Display, Formatter},
+    fmt::{Debug, Display},
     hash::Hash,
     iter,
     ops::Not,
 };
 
-use derive_more::From;
 use itertools::Itertools;
 use petgraph::{
     adj::UnweightedList,
@@ -107,6 +106,12 @@ use crate::{
     typed_ix::TypedIx,
     world::WorldGrid,
 };
+
+mod platform_layout;
+mod platform_limits;
+
+pub use platform_layout::{PlatformLayout, ValidationErrorPrintout, ValidationResult};
+pub use platform_limits::PlatformLimits;
 
 /// Maps dimensions to platform definitions, including rotated variants.
 pub fn dims_platform_map(
