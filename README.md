@@ -1,4 +1,4 @@
-# Timberborn Support Solver
+# Timberborn PlatformCruncher
 
 Timberborn's 3D terrain, which can be supported using platforms, is an essential part of gameplay. Due to the fairly limited range of supports, and the fact that they take up a spot on the ground, finding an efficient layout can mean slightly more space on the ground for plants, for instance.
 

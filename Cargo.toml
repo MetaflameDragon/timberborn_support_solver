@@ -1,11 +1,11 @@
 [package]
-name = "timberborn_support_solver"
+name = "timberborn_platform_cruncher"
 version = "0.1.0"
 edition = "2024"
 resolver = "3"
 
 [[bin]]
-name = "timberborn_support_solver"
+name = "timberborn_platform_cruncher"
 
 [lib]
 

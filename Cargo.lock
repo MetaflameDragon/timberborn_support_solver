@@ -1106,7 +1106,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timberborn_support_solver"
+name = "timberborn_platform_cruncher"
 version = "0.1.0"
 dependencies = [
  "anyhow",

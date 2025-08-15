@@ -15,10 +15,11 @@ use itertools::Itertools;
 use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
 use thiserror::Error;
-use timberborn_support_solver::{
+use timberborn_platform_cruncher::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
     ValidationResult,
     dimensions::Dimensions,
+    encoder,
     grid::Grid,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
     platform_def,
@@ -177,7 +178,7 @@ async fn repl_loop() -> anyhow::Result<()> {
     }
 
     let dims_platform_map: HashMap<Dimensions, PlatformDef> = {
-        timberborn_support_solver::encoder::dims_platform_map(&PLATFORMS_DEFAULT)
+        encoder::dims_platform_map(&PLATFORMS_DEFAULT)
             .into_iter()
             .map(|(k, v)| (k, *v.iter().next().unwrap()))
             .collect()
