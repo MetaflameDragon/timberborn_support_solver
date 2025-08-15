@@ -128,7 +128,7 @@ impl PlatformLayout {
         for _ in 0..(TERRAIN_SUPPORT_DISTANCE - 1) {
             let supported_set: HashSet<Point> = tracking_grid
                 .enumerate()
-                .filter_map(|(p, t)| t.terrain_supported.and_then(|b| b.then_some(p)))
+                .filter_map(|(p, t)| (Some(true) == t.terrain_supported).then_some(p))
                 .flat_map(Point::neighbors)
                 .collect();
             for p in supported_set {

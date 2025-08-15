@@ -246,8 +246,8 @@ async fn repl_loop() -> anyhow::Result<()> {
 
                 Ok(())
             }
-            ReplCommand::Solve { limits } => {
-                let limits = try_into_platform_limits(limits, &state.dims_platform_map)?;
+            ReplCommand::Solve { limits: limit_args } => {
+                let limits = try_into_platform_limits(limit_args, &state.dims_platform_map)?;
                 let Some(LoadedProject { project, .. }) = &state.loaded_project else {
                     bail!("No project loaded");
                 };
