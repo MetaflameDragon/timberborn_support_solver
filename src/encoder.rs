@@ -80,7 +80,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    fmt::{Debug, Display},
+    fmt::Debug,
     hash::Hash,
     iter,
     ops::Not,

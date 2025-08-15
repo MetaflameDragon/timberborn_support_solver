@@ -11,14 +11,13 @@ use std::{
 
 use anyhow::{Context, bail};
 use clap::{CommandFactory, Parser, Subcommand};
-use itertools::Itertools;
 use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
-use rustsat::solvers::{Solve, SolverResult};
+use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 use timberborn_platform_cruncher::{
-    Project, SolverRunConfig, encoder,
+    Project, encoder,
     encoder::{Encoding, PlatformLayout, PlatformLimits, ValidationResult},
     grid::Grid,
     math::Dimensions,
@@ -26,7 +25,6 @@ use timberborn_platform_cruncher::{
     platform_def, run_solver,
     world::World,
 };
-use tokio::select;
 use tokio_util::{future::FutureExt, sync::CancellationToken};
 
 #[derive(Debug, Parser)]

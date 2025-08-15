@@ -1,15 +1,12 @@
-use std::ops::Not;
-
 use anyhow::{Context, anyhow};
 use futures::TryFutureExt;
-use itertools::Itertools;
 use rustsat::{
-    instances::{Cnf, ManageVars},
-    solvers::{Interrupt, InterruptSolver, Solve, SolverResult},
+    instances::Cnf,
+    solvers::{Interrupt, Solve, SolverResult},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{encoder::PlatformLimits, world::World};
+use crate::world::World;
 
 pub mod encoder;
 pub mod grid;
@@ -21,27 +18,12 @@ pub mod world;
 
 const TERRAIN_SUPPORT_DISTANCE: usize = 4;
 
-#[derive(Debug, Clone)]
-pub struct SolverRunConfig {
-    pub limits: PlatformLimits,
-}
-
-impl SolverRunConfig {
-    pub fn limits(&self) -> &PlatformLimits {
-        &self.limits
-    }
-
-    pub fn limits_mut(&mut self) -> &mut PlatformLimits {
-        &mut self.limits
-    }
-}
-
-pub fn run_solver<S>(mut solver: S, cnf: Cnf) -> anyhow::Result<(SolverFuture<S>, Interrupter)>
+pub fn run_solver<S>(mut solver: S, cnf: Cnf) -> anyhow::Result<(SolverFuture<S>, S::Interrupter)>
 where
     S: Solve + Interrupt + Send + 'static,
 {
     solver.add_cnf(cnf).context("Failed to add CNF")?;
-    let interrupter = Box::new(solver.interrupter());
+    let interrupter = solver.interrupter();
 
     let handle = tokio::task::spawn_blocking(move || -> anyhow::Result<(SolverResult, S)> {
         Ok((solver.solve()?, solver))
@@ -49,8 +31,6 @@ where
 
     Ok((SolverFuture { handle }, interrupter))
 }
-
-pub type Interrupter = Box<dyn InterruptSolver + Send>;
 
 pub struct SolverFuture<S> {
     handle: tokio::task::JoinHandle<anyhow::Result<(SolverResult, S)>>,
