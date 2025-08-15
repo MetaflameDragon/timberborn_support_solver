@@ -5,3 +5,4 @@ test*.toml
 !test/**
 *.log
 /logs/
+.ignore_*
