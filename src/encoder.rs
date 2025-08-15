@@ -109,45 +109,6 @@ use crate::{
     world::WorldGrid,
 };
 
-#[derive(Copy, Clone, Debug)]
-#[derive(Eq, PartialEq, Hash)]
-#[derive(From)]
-pub enum Node {
-    Platform(Dimensions),
-    Terrain(Point),
-}
-
-/// Node needs Ord & PartialOrd so it can be used in DiGraphMap
-impl Ord for Node {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (Node::Terrain(a), Node::Terrain(b)) => a.cmp(b),
-            (Node::Terrain(_), Node::Platform(_)) => Ordering::Less,
-            (Node::Platform(_), Node::Terrain(_)) => Ordering::Greater,
-            (Node::Platform(a), Node::Platform(b)) => {
-                // Ordering specific to Node! Does not match dimension ordering
-                (a.width(), a.height()).cmp(&(b.width(), b.height()))
-            }
-        }
-    }
-}
-
-impl PartialOrd for Node {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-// Mainly for printing the Dot format
-impl Display for Node {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Node::Platform(dims) => write!(f, "Platform {}x{}", dims.width(), dims.height()),
-            Node::Terrain(Point { x, y }) => write!(f, "({x}, {y})"),
-        }
-    }
-}
-
 /// Maps dimensions to platform definitions, including rotated variants.
 pub fn dims_platform_map(
     platform_defs: &[PlatformDef],
