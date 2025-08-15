@@ -22,10 +22,14 @@ use timberborn_platform_cruncher::{
     grid::Grid,
     math::Dimensions,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
-    platform_def, run_solver,
+    platform_def,
     world::World,
 };
 use tokio_util::{future::FutureExt, sync::CancellationToken};
+
+use crate::solver_runner::run_solver;
+
+mod solver_runner;
 
 #[derive(Debug, Parser)]
 #[command(multicall = true, arg_required_else_help = true, subcommand_required = true)]
