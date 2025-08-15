@@ -13,7 +13,7 @@ use anyhow::{Context, bail};
 use clap::{CommandFactory, Parser, Subcommand};
 use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
-use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
+use rustsat::solvers::{InterruptSolver, Solve, SolveStats, SolverResult};
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 use timberborn_platform_cruncher::{
@@ -361,6 +361,7 @@ async fn solver_loop(
             }
         }
 
+        info!("Solver stats:\n{:#?}", solver.stats());
         print_world(&project.world, Some(&layout), &validation);
     }
 }
