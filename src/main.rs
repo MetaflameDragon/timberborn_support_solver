@@ -251,13 +251,8 @@ async fn repl_loop() -> anyhow::Result<()> {
                 let solver = SolverConfig::new(&project.world);
                 let run_config = SolverRunConfig { limits };
 
-                let res = select! {
-                    res = run_solver(project, solver, run_config) => {res},
+                run_solver(project, solver, run_config).await.context("Error while solving")?;
 
-                };
-                if let Err(err) = res {
-                    bail!("Error while solving: {}", err.to_string());
-                }
                 println!("Done");
 
                 Ok(())
