@@ -17,10 +17,9 @@ use owo_colors::OwoColorize;
 use thiserror::Error;
 use timberborn_platform_cruncher::{
     PlatformLimits, Project, Solution, SolverConfig, SolverResponse, SolverRunConfig,
-    ValidationResult,
-    dimensions::Dimensions,
-    encoder,
+    ValidationResult, encoder,
     grid::Grid,
+    math::Dimensions,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
     platform_def,
     world::World,

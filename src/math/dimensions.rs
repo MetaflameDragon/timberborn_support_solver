@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::point::Point;
+use crate::math::Point;
 
 /// 2D dimensions with a width and a height.
 ///
@@ -83,7 +83,7 @@ impl PartialOrd for Dimensions {
     /// An empty dimension ([`Self::empty()`]) is always contained within any
     /// other dimension. If both are empty, they're equal.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use Ordering::*;
+        use std::cmp::Ordering::*;
         // Cases:
         // Both empty => equal
         // One empty => empty is less
@@ -159,7 +159,7 @@ impl Iterator for DimensionsIter {
 mod tests {
     use assertables::{assert_all, assert_len_eq_x};
 
-    use super::*;
+    use crate::math::dimensions::Dimensions;
 
     #[test]
     fn iter_dims() {

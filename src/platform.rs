@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{dimensions::Dimensions, point::Point};
+use crate::math::{Dimensions, Point};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[derive(Serialize, Deserialize)]
@@ -138,7 +138,7 @@ macro_rules! platform {
 #[cfg(test)]
 mod tests {
     //noinspection RsUnusedImport
-    use test_case::{test_case, test_matrix};
+    use test_case::test_matrix;
 
     use super::*;
 

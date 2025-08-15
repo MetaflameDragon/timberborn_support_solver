@@ -22,16 +22,15 @@ use serde::{Deserialize, Serialize};
 use crate::{
     encoder::EncodingVars,
     grid::Grid,
+    math::Point,
     platform::{PLATFORMS_DEFAULT, Platform, PlatformDef},
-    point::Point,
     world::World,
 };
 
-pub mod dimensions;
 pub mod encoder;
 pub mod grid;
+pub mod math;
 pub mod platform;
-pub mod point;
 mod typed_ix;
 pub mod utils;
 pub mod world;

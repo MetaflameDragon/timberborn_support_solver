@@ -101,10 +101,9 @@ use rustsat::{
 
 use crate::{
     TERRAIN_SUPPORT_DISTANCE,
-    dimensions::Dimensions,
     grid::Grid,
+    math::{Dimensions, Point},
     platform::{Platform, PlatformDef},
-    point::Point,
     typed_ix::TypedIx,
     world::WorldGrid,
 };
@@ -161,7 +160,7 @@ impl EncodingTileVars {
 
 #[derive(Clone, Debug)]
 pub enum EncodedItem {
-    Platform { point: Point, dims: Dimensions },
+    Platform { point: Point, dims: Dimensions }, // TODO: use the Platform struct
     Terrain { point: Point, layer: usize },
 }
 
@@ -271,6 +270,8 @@ impl EncodingVars {
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum EncodingNode {
+    // Note: within the DAG, platforms are distinguished only by their dimensions
+    // This refers to platforms solely by their dimensions, rather than PlatformDef
     Platform(Dimensions),
     Point(Point),
 }
