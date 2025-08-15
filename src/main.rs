@@ -14,14 +14,16 @@ use clap::{CommandFactory, Parser, Subcommand};
 use itertools::Itertools;
 use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
+use rustsat::solvers::{Solve, SolverResult};
+use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use thiserror::Error;
 use timberborn_platform_cruncher::{
-    Project, SolverConfig, SolverResponse, SolverRunConfig, encoder,
-    encoder::{PlatformLayout, PlatformLimits, ValidationResult},
+    Project, SolverRunConfig, encoder,
+    encoder::{Encoding, PlatformLayout, PlatformLimits, ValidationResult},
     grid::Grid,
     math::Dimensions,
     platform::{PLATFORMS_DEFAULT, PlatformDef},
-    platform_def,
+    platform_def, run_solver,
     world::World,
 };
 use tokio::select;
@@ -248,10 +250,9 @@ async fn repl_loop() -> anyhow::Result<()> {
                     bail!("No project loaded");
                 };
 
-                let solver = SolverConfig::new(&project.world);
-                let run_config = SolverRunConfig { limits };
+                let encoding = Encoding::encode(&PLATFORMS_DEFAULT, project.world.grid());
 
-                run_solver(project, solver, run_config).await.context("Error while solving")?;
+                solver_loop(project, &encoding, limits).await.context("Error while solving")?;
 
                 println!("Done");
 
@@ -275,10 +276,10 @@ fn load_project(path: &Path) -> anyhow::Result<Project> {
     toml::from_slice(&bytes).context("Error parsing file")
 }
 
-async fn run_solver(
+async fn solver_loop(
     project: &Project,
-    solver: SolverConfig,
-    mut run_config: SolverRunConfig,
+    encoding: &Encoding,
+    mut limits: PlatformLimits,
 ) -> anyhow::Result<()> {
     // Rather than a reverse for loop, this repeatedly looks for a solution with a
     // cardinality 1 lesser than each previous one. This means that, if there's a
@@ -287,7 +288,10 @@ async fn run_solver(
 
     loop {
         // info!("Solving for n <= {}...", run_config.max_platforms());
-        let (solver_future, interrupter) = solver.start(&run_config)?;
+        let instance = encoding.with_limits(&limits)?;
+        let (cnf, _var_manager) = instance.into_cnf();
+
+        let (solver_future, interrupter) = run_solver(GlucoseSimp::default(), cnf)?;
 
         let ctrl_c_cancellation = CancellationToken::new();
         tokio::spawn({
@@ -318,31 +322,34 @@ async fn run_solver(
         });
         let _guard = ctrl_c_cancellation.drop_guard();
 
-        let sol = match solver_future.future().await? {
-            SolverResponse::Sat(sol) => sol,
-            SolverResponse::Unsat => {
+        let (result, solver) = solver_future.future().await?;
+        let layout = match result {
+            SolverResult::Sat => {
+                PlatformLayout::from_assignment(&solver.full_solution()?, encoding.vars())
+            }
+            SolverResult::Unsat => {
                 println!("No solution found for the current constraints");
                 return Ok(());
             }
-            SolverResponse::Aborted => {
-                println!("Solver aborted");
+            SolverResult::Interrupted => {
+                println!("Solver interrupted");
                 return Ok(());
             }
         };
 
-        if sol.platform_count() == 0 {
+        if layout.platform_count() == 0 {
             println!("Found a solution with no platforms - aborting");
             return Ok(());
         }
 
-        run_config.limits_mut().entry(platform_def!(1, 1)).insert_entry(sol.platform_count() - 1);
+        limits.entry(platform_def!(1, 1)).insert_entry(layout.platform_count() - 1);
 
-        println!("Solution found ({} platforms total)", sol.platform_count());
-        let platform_stats = sol.platform_stats();
+        println!("Solution found ({} platforms total)", layout.platform_count());
+        let platform_stats = layout.platform_stats();
         for (def, count) in platform_stats.iter() {
             println!("{}: {}", def.dimensions_str(), count);
         }
-        let validation = sol.validate(&project.world);
+        let validation = layout.validate(&project.world);
         if validation.is_valid() {
             info!("Solution validation OK");
         } else {
@@ -352,7 +359,7 @@ async fn run_solver(
             }
         }
 
-        print_world(&project.world, Some(&sol), &validation);
+        print_world(&project.world, Some(&layout), &validation);
     }
 }
 

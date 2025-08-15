@@ -95,7 +95,7 @@ use petgraph::{
 };
 use rustsat::{
     instances::{BasicVarManager, ManageVars, SatInstance},
-    types::{Lit, Var},
+    types::{Lit, Var, constraints::CardConstraint},
 };
 
 use crate::{
@@ -421,180 +421,227 @@ impl EncodingDag {
     }
 }
 
-pub fn encode(
-    platform_defs: &[PlatformDef],
-    terrain: &WorldGrid,
-    instance: &mut SatInstance<BasicVarManager>,
-) -> EncodingVars {
-    // TODO: A lot of places here rely on all tiles having all platform vars
-    // maybe this should expect those lookups to be fallible?
+pub struct Encoding {
+    vars: EncodingVars,
+    instance: SatInstance,
+}
 
-    let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
+impl Encoding {
+    pub fn encode(platform_defs: &[PlatformDef], terrain: &WorldGrid) -> Encoding {
+        // TODO: A lot of places here rely on all tiles having all platform vars
+        // maybe this should expect those lookups to be fallible?
 
-    let dag = EncodingDag::new(vars.platform_dims());
-    dbg!(&dag);
+        let mut instance = SatInstance::<BasicVarManager>::new();
 
-    for current_point in terrain.dims().iter_within() {
-        let current_vars = vars.at(current_point).unwrap();
+        let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
 
-        // ===== Platform selection DAG =====
-        for (smaller, larger) in dag.iter_platform_edges_reduced() {
-            // The DAG has nodes ordered as smaller -> larger
-            // This means that 1x1 has no in-edges, and the largest platforms have no
-            // out-edges We want the implications encoded as smaller <- larger
-            instance.add_lit_impl_lit(
-                current_vars.for_dims(larger).unwrap().pos_lit(),
-                current_vars.for_dims(smaller).unwrap().pos_lit(),
-            );
-        }
+        let dag = EncodingDag::new(vars.platform_dims());
+        dbg!(&dag);
 
-        for ((ix_a, dims_a), (ix_b, dims_b)) in dag
-            .iter_platform_targets_by_source()
-            .flat_map(|targets| Itertools::tuple_combinations(targets.into_iter()))
-        {
-            // All nodes `n` such that `a ->+ n` and `b ->+ n`
-            // Then filters out nodes `n` for `m ->* n`
-            let common_successors = dag.common_platform_successors(ix_a, ix_b);
-            let common_successors_maximal_ixs: Vec<_> =
-                dag.maximal_from(&common_successors.iter().map(|(ix, _)| *ix).collect_vec());
-            let common_successors_maximal = common_successors.iter().filter_map(|(ix, dims)| {
-                common_successors_maximal_ixs.contains(ix).then_some(*dims)
-            });
-            // Result: pairs `a`, `b` and an associated set C, where:
-            // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
-            // `->+`: transitive successor (1 or more edges)
-            // `!->+`: not a transitive successor
+        for current_point in terrain.dims().iter_within() {
+            let current_vars = vars.at(current_point).unwrap();
 
-            // (~a | ~b | i1 | i2...), or also (a & b) -> (i1 | i2...)
-            instance.add_cube_impl_clause(
-                &[
-                    current_vars.for_dims(dims_a).unwrap().pos_lit(),
-                    current_vars.for_dims(dims_b).unwrap().pos_lit(),
-                ],
-                &common_successors_maximal
-                    .into_iter()
-                    .map(|dims| current_vars.for_dims(dims).unwrap().pos_lit())
-                    .collect_vec(),
-            );
-        }
-
-        // ===== Platform-terrain clauses =====
-        // Point -> disjunction of platforms
-        // For the current tile, look at all platforms that support this tile.
-        // (This means platforms to the top-left of the current point.)
-        // This is effectively a reverse iteration - rather than taking a platform
-        // _here_ and binding _other_ tiles to it, this takes the _current_ tile and
-        // binds _other_ platforms to it. The point doesn't move, where we look for
-        // other platforms moves.
-        // First make sure there even _is_ a terrain tile above
-        if let Some(point_var) = current_vars.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]) {
-            let platform_vars =
-                dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
-                    // Check that we're not looking out of bounds, and get the platform var there
-                    vars.at(current_point - offset).map(|v| v.dims_vars[&dims])
-                });
-
-            // If this binds to no platforms (shouldn't at the moment!), it'll become p ->
-            // [] An empty clause is unsat, so p would be forced to be false (as
-            // expected) It also translates to a [~p] CNF clause, so yeah,
-            // simple unit neg literal
-            instance.add_lit_impl_clause(
-                point_var.pos_lit(),
-                &platform_vars.map(|v| v.pos_lit()).collect_vec(),
-            );
-        }
-
-        // ===== Terrain support =====
-
-        if let Some(point_terrain) = current_vars.terrain {
-            // For the current tile, get all neighbors
-            let neighbor_terrain_vars: Vec<_> = current_point
-                .neighbors()
-                .into_iter()
-                .flat_map(|n| vars.at(n).and_then(|v| v.terrain))
-                .chain(iter::once(point_terrain))
-                .collect();
-            // Add for all layers, i -> j for i + 1 = j
-            for (i, j) in (0..TERRAIN_SUPPORT_DISTANCE).tuple_windows() {
-                // heights: i -> j
-                // Starts at 0 going down
-                // TERRAIN_SUPPORT_DISTANCE-1 is closest to platforms
-
-                // Add an implication: tile -> disjunction of neighbors below
-                instance.add_lit_impl_clause(
-                    point_terrain[i].pos_lit(),
-                    &neighbor_terrain_vars.iter().map(|v| v[j].pos_lit()).collect_vec(),
+            // ===== Platform selection DAG =====
+            for (smaller, larger) in dag.iter_platform_edges_reduced() {
+                // The DAG has nodes ordered as smaller -> larger
+                // This means that 1x1 has no in-edges, and the largest platforms have no
+                // out-edges We want the implications encoded as smaller <- larger
+                instance.add_lit_impl_lit(
+                    current_vars.for_dims(larger).unwrap().pos_lit(),
+                    current_vars.for_dims(smaller).unwrap().pos_lit(),
                 );
             }
 
-            // Finally, require the topmost var
-            // TODO: this can be optimized trivially
-            instance.add_unit(point_terrain[0].pos_lit());
-        }
+            for ((ix_a, dims_a), (ix_b, dims_b)) in dag
+                .iter_platform_targets_by_source()
+                .flat_map(|targets| Itertools::tuple_combinations(targets.into_iter()))
+            {
+                // All nodes `n` such that `a ->+ n` and `b ->+ n`
+                // Then filters out nodes `n` for `m ->* n`
+                let common_successors = dag.common_platform_successors(ix_a, ix_b);
+                let common_successors_maximal_ixs: Vec<_> =
+                    dag.maximal_from(&common_successors.iter().map(|(ix, _)| *ix).collect_vec());
+                let common_successors_maximal =
+                    common_successors.iter().filter_map(|(ix, dims)| {
+                        common_successors_maximal_ixs.contains(ix).then_some(*dims)
+                    });
+                // Result: pairs `a`, `b` and an associated set C, where:
+                // `a ->+ c in C`, `b ->+ c in C`, `c, d in C: c !->+ d`
+                // `->+`: transitive successor (1 or more edges)
+                // `!->+`: not a transitive successor
 
-        // ===== Platform overlap =====
+                // (~a | ~b | i1 | i2...), or also (a & b) -> (i1 | i2...)
+                instance.add_cube_impl_clause(
+                    &[
+                        current_vars.for_dims(dims_a).unwrap().pos_lit(),
+                        current_vars.for_dims(dims_b).unwrap().pos_lit(),
+                    ],
+                    &common_successors_maximal
+                        .into_iter()
+                        .map(|dims| current_vars.for_dims(dims).unwrap().pos_lit())
+                        .collect_vec(),
+                );
+            }
 
-        // Strategy:
-        // All platforms are aligned by their top-left corner point
-        // Iterate all points supported by platforms at this position
-        // For each point, forbid the 1x1 point at that location
-        // (Note: this assumes the existence of a 1x1 platform - this can be
-        // resolved by adding a "fake" 1x1 if it's missing, TODO later)
-        // Then, for each point at the top edge (x; 0), iterate the left edge
-        // (0; y), map those points to platforms supporting them, and forbid those.
+            // ===== Platform-terrain clauses =====
+            // Point -> disjunction of platforms
+            // For the current tile, look at all platforms that support this tile.
+            // (This means platforms to the top-left of the current point.)
+            // This is effectively a reverse iteration - rather than taking a platform
+            // _here_ and binding _other_ tiles to it, this takes the _current_ tile and
+            // binds _other_ platforms to it. The point doesn't move, where we look for
+            // other platforms moves.
+            // First make sure there even _is_ a terrain tile above
+            if let Some(point_var) = current_vars.terrain.map(|t| t[TERRAIN_SUPPORT_DISTANCE - 1]) {
+                let platform_vars =
+                    dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                        // Check that we're not looking out of bounds, and get the platform var
+                        // there
+                        vars.at(current_point - offset).map(|v| v.dims_vars[&dims])
+                    });
 
-        // Restrict "top-left-corner overlaps", i.e. where a platform's top-left corner
-        // is located within another
-        for (plat_var, overlapping_1x1_var) in
-            dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
-                // Skip (relative) 0;0 because that would make a platform restrict itself
-                (offset != Point::new(0, 0)).then_some((
-                    current_vars.dims_vars[&dims],
-                    // Assumes that 1x1 exists!
-                    vars.at(current_point + offset).map(|v| v.dims_vars[&Dimensions::new(1, 1)])?,
-                ))
-            })
-        {
-            instance.add_lit_impl_lit(plat_var.pos_lit(), overlapping_1x1_var.neg_lit());
-        }
+                // If this binds to no platforms (shouldn't at the moment!), it'll become p ->
+                // [] An empty clause is unsat, so p would be forced to be false (as
+                // expected) It also translates to a [~p] CNF clause, so yeah,
+                // simple unit neg literal
+                instance.add_lit_impl_clause(
+                    point_var.pos_lit(),
+                    &platform_vars.map(|v| v.pos_lit()).collect_vec(),
+                );
+            }
 
-        // For the "top edge" of the supported point rectangle, restrict
-        // "left edge"-point-supporting platforms that intersect
-        // Forward-step for all (x;0) & reverse-step for all (0;y) from that point
-        for (plat_var, intersection_point) in
-            dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
-                // Skip (relative) 0;0 because that would make a platform restrict itself
-                (offset != Point::new(0, 0) && offset.y == 0)
-                    .then_some((current_vars.dims_vars[&dims], offset))
-            })
-        {
-            for other_plat_var in
+            // ===== Terrain support =====
+
+            if let Some(point_terrain) = current_vars.terrain {
+                // For the current tile, get all neighbors
+                let neighbor_terrain_vars: Vec<_> = current_point
+                    .neighbors()
+                    .into_iter()
+                    .flat_map(|n| vars.at(n).and_then(|v| v.terrain))
+                    .chain(iter::once(point_terrain))
+                    .collect();
+                // Add for all layers, i -> j for i + 1 = j
+                for (i, j) in (0..TERRAIN_SUPPORT_DISTANCE).tuple_windows() {
+                    // heights: i -> j
+                    // Starts at 0 going down
+                    // TERRAIN_SUPPORT_DISTANCE-1 is closest to platforms
+
+                    // Add an implication: tile -> disjunction of neighbors below
+                    instance.add_lit_impl_clause(
+                        point_terrain[i].pos_lit(),
+                        &neighbor_terrain_vars.iter().map(|v| v[j].pos_lit()).collect_vec(),
+                    );
+                }
+
+                // Finally, require the topmost var
+                // TODO: this can be optimized trivially
+                instance.add_unit(point_terrain[0].pos_lit());
+            }
+
+            // ===== Platform overlap =====
+
+            // Strategy:
+            // All platforms are aligned by their top-left corner point
+            // Iterate all points supported by platforms at this position
+            // For each point, forbid the 1x1 point at that location
+            // (Note: this assumes the existence of a 1x1 platform - this can be
+            // resolved by adding a "fake" 1x1 if it's missing, TODO later)
+            // Then, for each point at the top edge (x; 0), iterate the left edge
+            // (0; y), map those points to platforms supporting them, and forbid those.
+
+            // Restrict "top-left-corner overlaps", i.e. where a platform's top-left corner
+            // is located within another
+            for (plat_var, overlapping_1x1_var) in
                 dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
-                    // The (0;0) skip is unnecessary here, but it would produce a duplicate clause
-                    // Combining this with the previous step would help
-                    (offset != Point::new(0, 0) && offset.x == 0).then(|| {
-                        vars.at(current_point + intersection_point - offset)
-                            .map(|v| v.dims_vars[&dims])
-                    })?
+                    // Skip (relative) 0;0 because that would make a platform restrict itself
+                    (offset != Point::new(0, 0)).then_some((
+                        current_vars.dims_vars[&dims],
+                        // Assumes that 1x1 exists!
+                        vars.at(current_point + offset)
+                            .map(|v| v.dims_vars[&Dimensions::new(1, 1)])?,
+                    ))
                 })
             {
-                instance.add_lit_impl_lit(plat_var.pos_lit(), other_plat_var.neg_lit());
+                instance.add_lit_impl_lit(plat_var.pos_lit(), overlapping_1x1_var.neg_lit());
+            }
+
+            // For the "top edge" of the supported point rectangle, restrict
+            // "left edge"-point-supporting platforms that intersect
+            // Forward-step for all (x;0) & reverse-step for all (0;y) from that point
+            for (plat_var, intersection_point) in
+                dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                    // Skip (relative) 0;0 because that would make a platform restrict itself
+                    (offset != Point::new(0, 0) && offset.y == 0)
+                        .then_some((current_vars.dims_vars[&dims], offset))
+                })
+            {
+                for other_plat_var in
+                    dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                        // The (0;0) skip is unnecessary here, but it would produce a duplicate
+                        // clause Combining this with the previous step
+                        // would help
+                        (offset != Point::new(0, 0) && offset.x == 0).then(|| {
+                            vars.at(current_point + intersection_point - offset)
+                                .map(|v| v.dims_vars[&dims])
+                        })?
+                    })
+                {
+                    instance.add_lit_impl_lit(plat_var.pos_lit(), other_plat_var.neg_lit());
+                }
+            }
+
+            // ===== Out-of-bounds platforms =====
+
+            // This simply forbids platforms that would go outside the bounds of the grid
+            for plat_var in dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
+                terrain
+                    .dims()
+                    .contains(current_point + offset)
+                    .not()
+                    .then_some(current_vars.dims_vars[&dims])
+            }) {
+                instance.add_unit(plat_var.neg_lit());
             }
         }
 
-        // ===== Out-of-bounds platforms =====
-
-        // This simply forbids platforms that would go outside the bounds of the grid
-        for plat_var in dag.iter_point_platform_edges_reduced().filter_map(|(offset, dims)| {
-            terrain
-                .dims()
-                .contains(current_point + offset)
-                .not()
-                .then_some(current_vars.dims_vars[&dims])
-        }) {
-            instance.add_unit(plat_var.neg_lit());
-        }
+        Encoding { vars, instance }
     }
 
-    vars
+    pub fn vars(&self) -> &EncodingVars {
+        &self.vars
+    }
+
+    pub fn with_limits(&self, limits: &PlatformLimits) -> anyhow::Result<SatInstance> {
+        let mut instance = self.instance.clone();
+        for (&platform_type, &limit) in limits.iter() {
+            println!("Limiting {platform_type} platforms to n <= {limit}");
+            let upper_constraint = if platform_type.rectangular() {
+                let mut limit_vars = vec![];
+                for tile_vars in self.vars.iter_by_points() {
+                    let limit_var = instance.new_var();
+                    limit_vars.push(limit_var);
+                    for var in [platform_type.dims(), platform_type.dims().flipped()]
+                        .iter()
+                        .filter_map(|d| tile_vars.for_dims(*d))
+                    {
+                        instance.add_lit_impl_lit(var.pos_lit(), limit_var.pos_lit());
+                    }
+                }
+
+                CardConstraint::new_ub(limit_vars.iter().map(|var| var.pos_lit()), limit)
+            } else {
+                CardConstraint::new_ub(
+                    self.vars
+                        .iter_dims_vars(platform_type.dims())
+                        .unwrap()
+                        .map(|var| var.pos_lit()),
+                    limit,
+                )
+            };
+
+            instance.add_card_constr(upper_constraint);
+        }
+
+        Ok(instance)
+    }
 }
