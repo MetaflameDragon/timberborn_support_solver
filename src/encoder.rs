@@ -100,7 +100,6 @@ use rustsat::{
 
 use crate::{
     TERRAIN_SUPPORT_DISTANCE,
-    grid::Grid,
     math::{Dimensions, Point},
     platform::{Platform, PlatformDef},
     typed_ix::TypedIx,
@@ -112,6 +111,8 @@ mod platform_limits;
 
 pub use platform_layout::{PlatformLayout, ValidationErrorPrintout, ValidationResult};
 pub use platform_limits::PlatformLimits;
+
+use crate::math::Grid;
 
 /// Maps dimensions to platform definitions, including rotated variants.
 pub fn dims_platform_map(

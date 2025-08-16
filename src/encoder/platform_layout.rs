@@ -12,8 +12,7 @@ use rustsat::types::Assignment;
 use crate::{
     TERRAIN_SUPPORT_DISTANCE,
     encoder::EncodingVars,
-    grid::Grid,
-    math::Point,
+    math::{Grid, Point},
     platform::{Platform, PlatformDef},
     world::World,
 };

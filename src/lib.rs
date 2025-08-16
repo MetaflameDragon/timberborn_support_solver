@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::world::World;
 
 pub mod encoder;
-pub mod grid;
 pub mod math;
 pub mod platform;
 mod typed_ix;

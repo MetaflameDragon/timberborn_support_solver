@@ -19,8 +19,7 @@ use thiserror::Error;
 use timberborn_platform_cruncher::{
     Project, encoder,
     encoder::{Encoding, PlatformLayout, PlatformLimits, ValidationResult},
-    grid::Grid,
-    math::Dimensions,
+    math::{Dimensions, Grid},
     platform::{PLATFORMS_DEFAULT, PlatformDef},
     platform_def,
     world::World,
