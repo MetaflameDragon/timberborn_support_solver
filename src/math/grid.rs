@@ -2,7 +2,7 @@ use std::ops::Div;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{dimensions::Dimensions, point::Point};
+use crate::math::{Dimensions, Point};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid<T> {

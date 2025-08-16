@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::point::Point;
+use crate::math::Point;
 
 /// 2D dimensions with a width and a height.
 ///

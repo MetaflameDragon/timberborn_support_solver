@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{dimensions::Dimensions, point::Point};
+use crate::math::{Dimensions, Point};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[derive(Serialize, Deserialize)]
@@ -119,19 +119,19 @@ impl Platform {
 #[allow(unused_macros)]
 macro_rules! platform {
     (1x1 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), platform_def!(1, 1))
+        Platform::new(Point::new($x, $y), platform_def!(1, 1), false)
     };
     (1x2 @ $x:literal, $y:literal) => {
         Platform::new(Point::new($x, $y), platform_def!(1, 2))
     };
     (2x1 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), platform_def!(2, 1))
+        Platform::new(Point::new($x, $y), platform_def!(1, 2), true)
     };
     (3x3 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), platform_def!(3, 3))
+        Platform::new(Point::new($x, $y), platform_def!(3, 3), false)
     };
     (5x5 @ $x:literal, $y:literal) => {
-        Platform::new(Point::new($x, $y), platform_def!(5, 5))
+        Platform::new(Point::new($x, $y), platform_def!(5, 5), false)
     };
 }
 

@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashSet, VecDeque},
     fmt::{Display, Formatter},
     ops::{Add, Mul, Neg, Sub},
 };
@@ -7,7 +6,6 @@ use std::{
 use rustsat::types::Lit;
 use serde::{Deserialize, Serialize};
 
-use crate::grid::Grid;
 // The math is a mess but whatever
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -52,36 +50,6 @@ impl Point {
             Point::new(self.x - 1, self.y),
             Point::new(self.x, self.y - 1),
         ]
-    }
-
-    /// Returns a set of points up to `depth` away, which were reached through
-    /// adjacent connections based on `grid`.
-    pub fn adjacent_points(self, depth: usize, grid: &Grid<bool>) -> HashSet<Point> {
-        let mut points = HashSet::new();
-
-        let mut queue = VecDeque::new();
-        queue.push_back((self, 0));
-        points.insert(self);
-
-        while let Some((point, p_depth)) = queue.pop_front() {
-            for n in point.neighbors() {
-                // Skip if grid has false (or out of bounds)
-                if grid.get(n) != Some(&true) {
-                    continue;
-                }
-                // Try to add, skip enqueue if already added
-                if !points.insert(n) {
-                    continue;
-                }
-                // Don't enqueue if too deep
-                if p_depth + 1 >= depth {
-                    continue;
-                }
-                queue.push_back((n, p_depth + 1));
-            }
-        }
-
-        points
     }
 
     pub fn as_lit_pos(self) -> Option<Lit> {
@@ -169,7 +137,6 @@ mod tests {
     use assertables::*;
 
     use super::*;
-    use crate::dimensions::Dimensions;
 
     #[test]
     fn iter_manhattan() {
@@ -181,42 +148,5 @@ mod tests {
         assert_all!(manhattan_points.windows(2), |pair: &[Point]| {
             order_predicate(pair[0], pair[1])
         });
-    }
-
-    #[test]
-    fn adjacent_points() {
-        let c = Point { x: 2, y: 2 };
-        let grid = b"\
-            .--.\
-            .-..\
-            ....\
-            --..\
-              "
-        .map(|c| match c as char {
-            '.' => true,
-            _ => false,
-        })
-        .to_vec();
-        let grid = Grid::try_from_vec(Dimensions::new(4, 4), grid).unwrap();
-
-        // .  .
-        // . ..
-        // ..X.
-        //   ..
-        // ->
-        // .  3
-        // 3 12
-        // 2101
-        //   12
-
-        let adjacent_points = c.adjacent_points(3, &grid);
-
-        assert_set_eq!(
-            adjacent_points,
-            [(0, 1), (0, 2), (1, 2), (2, 1), (2, 2), (2, 3), (3, 0), (3, 1), (3, 2), (3, 3)]
-                .iter()
-                .map(|t| Point::new(t.0, t.1))
-                .collect::<Vec<_>>()
-        );
     }
 }

@@ -8,7 +8,7 @@ use serde::{
     ser::SerializeSeq,
 };
 
-use crate::{dimensions::Dimensions, grid::Grid};
+use crate::math::{Dimensions, Grid};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct World {
