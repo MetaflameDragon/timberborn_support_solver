@@ -83,7 +83,7 @@ impl PartialOrd for Dimensions {
     /// An empty dimension ([`Self::empty()`]) is always contained within any
     /// other dimension. If both are empty, they're equal.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use std::cmp::Ordering::*;
+        use Ordering::*;
         // Cases:
         // Both empty => equal
         // One empty => empty is less
@@ -159,7 +159,7 @@ impl Iterator for DimensionsIter {
 mod tests {
     use assertables::{assert_all, assert_len_eq_x};
 
-    use crate::math::dimensions::Dimensions;
+    use super::*;
 
     #[test]
     fn iter_dims() {
