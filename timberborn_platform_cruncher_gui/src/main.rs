@@ -4,7 +4,7 @@ mod app;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
-    env_logger::init();
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

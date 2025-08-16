@@ -20,6 +20,11 @@ impl<T> Grid<T> {
         self.data.chunks_exact(self.dims.width)
     }
 
+    pub fn iter_rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
+        debug_assert_eq!(self.data.len() % self.dims.width, 0);
+        self.data.chunks_exact_mut(self.dims.width)
+    }
+
     pub fn from_fn<F>(dims: Dimensions, map_fn: F) -> Self
     where
         F: FnMut(Point) -> T,

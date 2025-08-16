@@ -11,7 +11,7 @@ use crate::math::Point;
 ///
 /// Dimensions have a partial ordering defined,
 /// such that: `a <= b` <-> `a` is contained within `b`.
-#[derive(Debug, Copy, Clone, Eq)]
+#[derive(Debug, Copy, Clone, Eq, Default)]
 #[derive(Serialize, Deserialize)]
 pub struct Dimensions {
     pub width: usize,
