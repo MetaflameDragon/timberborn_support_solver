@@ -1,13 +1,26 @@
 use std::{ops::ControlFlow, sync::Arc};
 
+use anyhow::{Context as _, anyhow, bail};
 use eframe::{Frame, Storage};
 use egui::{
     Button, Color32, Context, DragValue, Modal, PointerButton, Response, RichText, Sense, Ui,
     UiBuilder, Vec2, Widget, vec2,
 };
 use egui_canvas::Canvas;
-use log::info;
-use timberborn_platform_cruncher::math::{Dimensions, Grid, Point};
+use futures::{FutureExt, TryFutureExt, future::BoxFuture};
+use log::{error, info, warn};
+use rustsat::{
+    instances::Cnf,
+    solvers::{Interrupt, Solve, SolverResult},
+};
+use timberborn_platform_cruncher::{
+    encoder::{Encoding, PlatformLayout, PlatformLimits},
+    math::{Dimensions, Grid, Point},
+};
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+
+use crate::{SolverBackendHandle, SolverRequest};
 
 #[derive(Clone, Default, Debug)]
 struct TerrainTile {
@@ -17,15 +30,16 @@ struct TerrainTile {
 pub struct App {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
+    backend: SolverBackendHandle,
 }
 
 struct CanvasClickQueue {}
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, backend: SolverBackendHandle) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
 
-        App { terrain_grid, resize_modal: Default::default() }
+        App { terrain_grid, resize_modal: Default::default(), backend }
     }
 
     fn draw_terrain_grid_ui(&mut self, ui: &mut Ui) -> Response {
@@ -106,6 +120,12 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn Storage) {}
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Err(err) = self.backend.tx_chan.blocking_send(SolverRequest::Stop) {
+            error!("Failed to send stop request: {}", err);
+        }
+    }
 }
 
 #[derive(Clone, Default, Debug)]
