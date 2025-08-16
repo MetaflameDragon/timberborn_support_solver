@@ -1138,6 +1138,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "timberborn_platform_cruncher_gui"
+version = "0.1.0"
+dependencies = [
+ "timberborn_platform_cruncher",
+]
+
+[[package]]
 name = "tokio"
 version = "1.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
