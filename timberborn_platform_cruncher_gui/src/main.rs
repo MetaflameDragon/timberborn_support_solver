@@ -1,9 +1,13 @@
-use log::{error, info};
+use anyhow::Context;
+use futures::FutureExt;
+use log::{error, info, warn};
+use rustsat::solvers::{Interrupt, InterruptSolver, Solve, SolveStats, SolverResult};
+use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     *,
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::oneshot;
 
 mod app;
 
@@ -14,9 +18,8 @@ fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
     // Backend
-    let (backend, fut) = SolverBackendHandle::spawn();
+    let backend = SolverBackend::<GlucoseSimp>::new(rt);
 
-    let backend_task_handle = rt.spawn(fut);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([500.0, 600.0])
@@ -30,54 +33,58 @@ fn main() -> anyhow::Result<()> {
     )
     .expect("Error while running frontend");
 
-    rt.block_on(async move {
-        match backend_task_handle.await {
-            Ok(()) => {}
-            Err(err) => {
-                error!("Backend error: {err:?}")
-            }
-        };
-    });
-
     Ok(())
 }
 
-pub struct SolverBackendHandle {
-    tx_chan: mpsc::Sender<SolverRequest>,
-    rx_chan: mpsc::Receiver<SolverResponse>,
+pub struct SolverBackend<S>
+where
+    S: Interrupt,
+{
+    rt: tokio::runtime::Runtime,
+    solver_rx: Option<oneshot::Receiver<(anyhow::Result<SolverResult>, S)>>,
+    interrupter: Option<S::Interrupter>,
 }
 
-impl SolverBackendHandle {
-    pub fn spawn() -> (SolverBackendHandle, impl Future<Output = ()>) {
-        let (req_tx, req_rx) = mpsc::channel::<SolverRequest>(100);
-        let (resp_tx, resp_rx) = mpsc::channel::<SolverResponse>(100);
-
-        let backend = SolverBackendHandle { tx_chan: req_tx, rx_chan: resp_rx };
-
-        (backend, run_backend(req_rx, resp_tx))
+impl<S> SolverBackend<S>
+where
+    S: Interrupt,
+{
+    pub fn new(rt: tokio::runtime::Runtime) -> Self {
+        Self { rt, solver_rx: None, interrupter: None }
     }
-}
 
-async fn run_backend(
-    mut req_rx: mpsc::Receiver<SolverRequest>,
-    resp_tx: mpsc::Sender<SolverResponse>,
-) {
-    loop {
-        if let Some(SolverRequest::Stop) = req_rx.recv().await {
-            info!("Stopping");
-            break;
+    pub fn start(&mut self, encoding: Encoding, limits: PlatformLimits) -> anyhow::Result<()>
+    where
+        S: Solve + Default + Send + 'static,
+    {
+        let instance = encoding.with_limits(&limits);
+        let (cnf, _var_manager) = instance.into_cnf();
+        let mut solver = S::default();
+        solver.add_cnf(cnf)?;
+        let (tx, rx) = oneshot::channel();
+
+        self.solver_rx = Some(rx);
+
+        _ = self.rt.spawn_blocking({
+            move || {
+                // If sending fails, the backend has dropped the receiver
+                _ = tx.send((solver.solve(), solver));
+            }
+        });
+        Ok(())
+    }
+
+    pub fn interrupt(&mut self) {
+        if let Some(interrupter) = self.interrupter.take() {
+            interrupter.interrupt();
+        } else {
+            warn!(target: "solver backend", "Nothing to interrupt")
         }
     }
-}
 
-pub enum SolverRequest {
-    Start { encoding: Encoding, limits: PlatformLimits },
-    Interrupt,
-    Stop,
-}
-
-pub enum SolverResponse {
-    Layout { layout: PlatformLayout, limits: PlatformLimits },
-    Unsat { limits: PlatformLimits },
-    Error(anyhow::Error),
+    pub fn try_recv(&mut self) -> Option<(anyhow::Result<SolverResult>, S)> {
+        // Both empty and closed is okay
+        // Closed also implies the value has already been received
+        self.solver_rx.as_mut()?.try_recv().ok()
+    }
 }

@@ -1,4 +1,4 @@
-use std::{ops::ControlFlow, sync::Arc};
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
 
 use anyhow::{Context as _, anyhow, bail};
 use eframe::{Frame, Storage};
@@ -16,27 +16,35 @@ use rustsat::{
 use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
+    platform::PLATFORMS_DEFAULT,
+    world::WorldGrid,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{SolverBackendHandle, SolverRequest};
+use crate::SolverBackend;
 
 #[derive(Clone, Default, Debug)]
 struct TerrainTile {
     terrain: bool,
 }
 
-pub struct App {
+pub struct App<S>
+where
+    S: Interrupt,
+{
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
-    backend: SolverBackendHandle,
+    backend: SolverBackend<S>,
 }
 
 struct CanvasClickQueue {}
 
-impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, backend: SolverBackendHandle) -> Self {
+impl<S> App<S>
+where
+    S: Interrupt,
+{
+    pub fn new(cc: &eframe::CreationContext<'_>, backend: SolverBackend<S>) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
 
         App { terrain_grid, resize_modal: Default::default(), backend }
@@ -77,8 +85,15 @@ impl App {
     }
 }
 
-impl eframe::App for App {
+impl<S> eframe::App for App<S>
+where
+    S: Interrupt + Solve + Default + Send + 'static,
+{
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+        if let Some((resp, _solver)) = self.backend.try_recv() {
+            info!("Response:\n{resp:#?}");
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             if ui.button("Resize grid").clicked() {
                 self.resize_modal.open(self.terrain_grid.dims());
@@ -115,17 +130,19 @@ impl eframe::App for App {
             let solve_btn_resp =
                 Button::new(RichText::new("Solve").color(Color32::GREEN).size(24f32)).ui(ui);
 
-            if solve_btn_resp.clicked() {}
+            if solve_btn_resp.clicked() {
+                let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
+                let encoding = Encoding::encode(&PLATFORMS_DEFAULT, &world_grid);
+                let limits = PlatformLimits::new(HashMap::new());
+
+                if let Err(err) = self.backend.start(encoding, limits) {
+                    error!("Failed to start solver: {err}");
+                }
+            }
         });
     }
 
     fn save(&mut self, storage: &mut dyn Storage) {}
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if let Err(err) = self.backend.tx_chan.blocking_send(SolverRequest::Stop) {
-            error!("Failed to send stop request: {}", err);
-        }
-    }
 }
 
 #[derive(Clone, Default, Debug)]

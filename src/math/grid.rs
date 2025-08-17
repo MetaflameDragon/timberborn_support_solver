@@ -32,6 +32,15 @@ impl<T> Grid<T> {
         Grid { data: dims.iter_within().map(map_fn).collect(), dims }
     }
 
+    /// Creates a new grid from an existing one by applying a function to each
+    /// item.
+    pub fn iter_map<F, U>(&self, map_fn: F) -> Grid<U>
+    where
+        F: FnMut(&T) -> U,
+    {
+        Grid { data: self.iter().map(map_fn).collect(), dims: self.dims }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.data.iter()
     }
