@@ -289,7 +289,7 @@ async fn solver_loop(
 
     loop {
         // info!("Solving for n <= {}...", run_config.max_platforms());
-        let instance = encoding.with_limits(&limits)?;
+        let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
 
         let (solver_future, interrupter) = run_solver(GlucoseSimp::default(), cnf)?;

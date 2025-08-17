@@ -612,7 +612,7 @@ impl Encoding {
         &self.vars
     }
 
-    pub fn with_limits(&self, limits: &PlatformLimits) -> anyhow::Result<SatInstance> {
+    pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
         let mut instance = self.instance.clone();
         for (&platform_type, &limit) in limits.iter() {
             println!("Limiting {platform_type} platforms to n <= {limit}");
@@ -643,6 +643,7 @@ impl Encoding {
             instance.add_card_constr(upper_constraint);
         }
 
-        Ok(instance)
+        // TODO: might need a Result?
+        instance
     }
 }
