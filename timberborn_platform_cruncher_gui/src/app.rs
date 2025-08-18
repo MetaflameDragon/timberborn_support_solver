@@ -22,7 +22,9 @@ use timberborn_platform_cruncher::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::SolverBackend;
+use crate::{SolverBackend, app::frame_history::FrameHistory};
+
+mod frame_history;
 
 #[derive(Clone, Default, Debug)]
 struct TerrainTile {
@@ -86,21 +88,23 @@ where
                     });
                 }
 
-                if let Some(layout) = &self.displayed_layout {
-                    for (_, plat) in layout.platforms() {
-                        let Some((a, b)) = plat.area_corners() else {
-                            continue;
-                        };
-                        let rect = ui.rect;
-
-                        let terrain_dims = self.terrain_grid.dims();
-                        let rect_tile_size = rect.size()
-                            / vec2(terrain_dims.width as f32, terrain_dims.height as f32);
-
-                        let a_pos_rel = rect_tile_size * vec2(a.x as f32 + 0.5, a.y as f32 + 0.5);
-                        let b_pos_rel = rect_tile_size * vec2(a.x as f32 - 0.5, a.y as f32 - 0.5);
-                    }
-                }
+                // if let Some(layout) = &self.displayed_layout {
+                //     for (_, plat) in layout.platforms() {
+                //         let Some((a, b)) = plat.area_corners() else {
+                //             continue;
+                //         };
+                //         let rect = ui.rect;
+                //
+                //         let terrain_dims = self.terrain_grid.dims();
+                //         let rect_tile_size = rect.size()
+                //             / vec2(terrain_dims.width as f32,
+                // terrain_dims.height as f32);
+                //
+                //         let a_pos_rel = rect_tile_size * vec2(a.x as f32 +
+                // 0.5, a.y as f32 + 0.5);         let b_pos_rel
+                // = rect_tile_size * vec2(a.x as f32 - 0.5, a.y as f32 - 0.5);
+                //     }
+                // }
             })
         })
         .response
@@ -148,7 +152,9 @@ impl<S> eframe::App for App<S>
 where
     S: Interrupt + Solve + SolveStats + Default + Send + 'static,
 {
-    fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
+        self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
+
         match self.try_get_current_session_results() {
             None => {}
             Some(SolverSessionResult::Unsat) => {
@@ -161,6 +167,8 @@ where
         };
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.frame_history.ui(ui);
+
             if ui.button("Resize grid").clicked() {
                 self.resize_modal.open(self.terrain_grid.dims());
             }
