@@ -7,7 +7,7 @@ use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     *,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, oneshot::error::TryRecvError};
 
 mod app;
 
@@ -41,8 +41,21 @@ where
     S: Interrupt,
 {
     rt: tokio::runtime::Runtime,
-    solver_rx: Option<oneshot::Receiver<(anyhow::Result<SolverResult>, S)>>,
+    session: Option<Session<S>>,
     interrupter: Option<S::Interrupter>,
+}
+
+struct Session<S> {
+    encoding: Encoding,
+    limits: PlatformLimits,
+    rx: oneshot::Receiver<(anyhow::Result<SolverResult>, S)>,
+}
+
+pub struct SolverResponse<S> {
+    pub result: anyhow::Result<SolverResult>,
+    pub solver: S,
+    pub encoding: Encoding,
+    pub limits: PlatformLimits,
 }
 
 impl<S> SolverBackend<S>
@@ -50,7 +63,7 @@ where
     S: Interrupt,
 {
     pub fn new(rt: tokio::runtime::Runtime) -> Self {
-        Self { rt, solver_rx: None, interrupter: None }
+        Self { rt, session: None, interrupter: None }
     }
 
     pub fn start(&mut self, encoding: Encoding, limits: PlatformLimits) -> anyhow::Result<()>
@@ -63,7 +76,7 @@ where
         solver.add_cnf(cnf)?;
         let (tx, rx) = oneshot::channel();
 
-        self.solver_rx = Some(rx);
+        self.session = Some(Session { encoding, limits, rx });
 
         _ = self.rt.spawn_blocking({
             move || {
@@ -82,9 +95,25 @@ where
         }
     }
 
-    pub fn try_recv(&mut self) -> Option<(anyhow::Result<SolverResult>, S)> {
+    pub fn try_recv<'a>(&mut self) -> Option<SolverResponse<S>> {
         // Both empty and closed is okay
         // Closed also implies the value has already been received
-        self.solver_rx.as_mut()?.try_recv().ok()
+        let session = self.session.as_mut()?;
+        match session.rx.try_recv() {
+            Ok((result, solver)) => {
+                let Session { encoding, limits, .. } = self.session.take().unwrap();
+                Some(SolverResponse { result, solver, encoding, limits })
+            }
+            Err(TryRecvError::Empty) => {
+                // In progress
+                None
+            }
+            Err(TryRecvError::Closed) => {
+                // Not running or already done
+                warn!(target: "solver backend", "Session channel was closed");
+                self.session = None;
+                None
+            }
+        }
     }
 }

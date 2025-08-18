@@ -437,7 +437,7 @@ impl Encoding {
         let vars = EncodingVars::new(platform_defs, terrain, instance.var_manager_mut());
 
         let dag = EncodingDag::new(vars.platform_dims());
-        dbg!(&dag);
+        // dbg!(&dag);
 
         for current_point in terrain.dims().iter_within() {
             let current_vars = vars.at(current_point).unwrap();

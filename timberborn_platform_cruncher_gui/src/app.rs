@@ -11,7 +11,7 @@ use futures::{FutureExt, TryFutureExt, future::BoxFuture};
 use log::{error, info, warn};
 use rustsat::{
     instances::Cnf,
-    solvers::{Interrupt, Solve, SolverResult},
+    solvers::{Interrupt, Solve, SolveStats, SolverResult},
 };
 use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
@@ -83,16 +83,59 @@ where
         })
         .response
     }
+
+    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult>
+    where
+        S: Solve + SolveStats,
+    {
+        let resp = self.backend.try_recv()?;
+        match resp.result {
+            Ok(SolverResult::Sat) => match resp.solver.full_solution() {
+                Ok(asgn) => {
+                    let layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
+                    Some(SolverSessionResult::Sat { layout })
+                }
+                Err(err) => {
+                    error!("Failed to get assignment, but the solver reported SAT: {:?}", err);
+                    None
+                }
+            },
+            Ok(SolverResult::Unsat) => {
+                info!("Unsat");
+                Some(SolverSessionResult::Unsat)
+            }
+            Ok(SolverResult::Interrupted) => {
+                info!("Solver interrupted");
+                None
+            }
+            Err(err) => {
+                error!("Solver error: {:?}", err);
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum SolverSessionResult {
+    Sat { layout: PlatformLayout },
+    Unsat,
 }
 
 impl<S> eframe::App for App<S>
 where
-    S: Interrupt + Solve + Default + Send + 'static,
+    S: Interrupt + Solve + SolveStats + Default + Send + 'static,
 {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
-        if let Some((resp, _solver)) = self.backend.try_recv() {
-            info!("Response:\n{resp:#?}");
-        }
+        match self.try_get_current_session_results() {
+            None => {}
+            Some(SolverSessionResult::Unsat) => {
+                info!("Unsat");
+            }
+            Some(SolverSessionResult::Sat { layout }) => {
+                info!("Sat\n{layout:#?}");
+            }
+        };
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if ui.button("Resize grid").clicked() {
