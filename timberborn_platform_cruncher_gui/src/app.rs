@@ -54,12 +54,18 @@ where
         ui.scope_builder(UiBuilder::new().sense(Sense::drag()), |ui| {
             egui::Frame::canvas(ui.style()).show(ui, |ui| {
                 let total_width = ui.available_width();
-                ui.set_width(total_width);
-                let spacing = ui.spacing_mut();
-                spacing.item_spacing = vec2(2f32, 2f32);
-                // Fixes sizing when the window is really small
-                // Otherwise, gaps between rows can become too large
-                spacing.interact_size = vec2(0f32, 0f32);
+                let tile_size =
+                    (total_width + spacing) / (self.terrain_grid.dims().width as f32) - spacing;
+                let get_offset = |p: Point, rel_tile_offset: Vec2| -> Vec2 {
+                    ((pos2(p.x as f32, p.y as f32)) * (tile_size + spacing)
+                        + rel_tile_offset * tile_size)
+                        .to_vec2()
+                };
+
+                let corner_pos =
+                    get_offset(self.terrain_grid.dims().corner_point_incl().unwrap(), Vec2::ONE);
+                ui.set_width(corner_pos.x);
+                ui.set_height(corner_pos.y);
 
                 let rect_side_len = (total_width
                     - ui.spacing().item_spacing.x * (self.terrain_grid.dims().width - 1) as f32)
@@ -78,6 +84,22 @@ where
                                 });
                         }
                     });
+                }
+
+                if let Some(layout) = &self.displayed_layout {
+                    for (_, plat) in layout.platforms() {
+                        let Some((a, b)) = plat.area_corners() else {
+                            continue;
+                        };
+                        let rect = ui.rect;
+
+                        let terrain_dims = self.terrain_grid.dims();
+                        let rect_tile_size = rect.size()
+                            / vec2(terrain_dims.width as f32, terrain_dims.height as f32);
+
+                        let a_pos_rel = rect_tile_size * vec2(a.x as f32 + 0.5, a.y as f32 + 0.5);
+                        let b_pos_rel = rect_tile_size * vec2(a.x as f32 - 0.5, a.y as f32 - 0.5);
+                    }
                 }
             })
         })
@@ -134,6 +156,7 @@ where
             }
             Some(SolverSessionResult::Sat { layout }) => {
                 info!("Sat\n{layout:#?}");
+                self.displayed_layout = Some(layout);
             }
         };
 
@@ -141,9 +164,12 @@ where
             if ui.button("Resize grid").clicked() {
                 self.resize_modal.open(self.terrain_grid.dims());
             }
-            if let ControlFlow::Break(Some(new_dims)) = self.resize_modal.ui(ui) {
+            if let ControlFlow::Break(Some(new_dims)) = self.resize_modal.ui(ui)
+                && !new_dims.empty()
+            {
                 self.terrain_grid = Grid::new(new_dims); // TODO copy old
             }
+            debug_assert!(!self.terrain_grid.dims().empty());
 
             let resp = self.draw_terrain_grid_ui(ui);
             if resp.dragged()
@@ -222,6 +248,11 @@ impl ResizeModal {
     fn modal_ui(&mut self, ui: &mut Ui) -> ControlFlow<Option<Dimensions>> {
         ui.add(DragValue::new(&mut self.stored_value.width).speed(1).fixed_decimals(0));
         ui.add(DragValue::new(&mut self.stored_value.height).speed(1).fixed_decimals(0));
+
+        // Limit each axis to 1 minimum
+        self.stored_value.width = self.stored_value.width.max(1);
+        self.stored_value.height = self.stored_value.height.max(1);
+
         ui.horizontal(|ui| {
             let apply_resp = ui.button("Apply");
             let cancel_resp = ui.button("Cancel");
