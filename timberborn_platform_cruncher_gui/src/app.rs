@@ -1,10 +1,10 @@
 use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
 
 use anyhow::{Context as _, anyhow, bail};
-use eframe::{Frame, Storage};
+use eframe::{Frame, Storage, emath::pos2, epaint::StrokeKind};
 use egui::{
-    Button, Color32, Context, DragValue, Modal, PointerButton, Response, RichText, Sense, Ui,
-    UiBuilder, Vec2, Widget, vec2,
+    Button, Color32, Context, DragValue, Modal, PointerButton, Pos2, Rect, Response, RichText,
+    Sense, Shape, Stroke, Ui, UiBuilder, Vec2, Widget, vec2,
 };
 use egui_canvas::Canvas;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
@@ -38,6 +38,8 @@ where
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
     backend: SolverBackend<S>,
+    displayed_layout: Option<PlatformLayout>,
+    frame_history: FrameHistory,
 }
 
 struct CanvasClickQueue {}
@@ -49,62 +51,73 @@ where
     pub fn new(cc: &eframe::CreationContext<'_>, backend: SolverBackend<S>) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
 
-        App { terrain_grid, resize_modal: Default::default(), backend }
+        App {
+            terrain_grid,
+            resize_modal: Default::default(),
+            backend,
+            displayed_layout: None,
+            frame_history: FrameHistory::default(),
+        }
     }
 
     fn draw_terrain_grid_ui(&mut self, ui: &mut Ui) -> Response {
         ui.scope_builder(UiBuilder::new().sense(Sense::drag()), |ui| {
             egui::Frame::canvas(ui.style()).show(ui, |ui| {
+                let corner_point = ui.next_widget_position();
+
+                // Spacing between items
+                let spacing = 2f32;
+                let min_tile_size = 3f32;
+
                 let total_width = ui.available_width();
-                let tile_size =
-                    (total_width + spacing) / (self.terrain_grid.dims().width as f32) - spacing;
+                let tile_size = ((total_width + spacing) / (self.terrain_grid.dims().width as f32)
+                    - spacing)
+                    .max(min_tile_size);
                 let get_offset = |p: Point, rel_tile_offset: Vec2| -> Vec2 {
                     ((pos2(p.x as f32, p.y as f32)) * (tile_size + spacing)
                         + rel_tile_offset * tile_size)
                         .to_vec2()
                 };
 
-                let corner_pos =
+                let grid_vec =
                     get_offset(self.terrain_grid.dims().corner_point_incl().unwrap(), Vec2::ONE);
-                ui.set_width(corner_pos.x);
-                ui.set_height(corner_pos.y);
+                ui.set_width(grid_vec.x);
+                ui.set_height(grid_vec.y);
 
-                let rect_side_len = (total_width
-                    - ui.spacing().item_spacing.x * (self.terrain_grid.dims().width - 1) as f32)
-                    / self.terrain_grid.dims().width as f32;
-
-                // TODO: Rework to not use hundreds of Frame objects
-                for row in self.terrain_grid.iter_rows_mut() {
-                    ui.horizontal_top(|ui| {
-                        ui.set_height(rect_side_len);
-                        for tile in row {
-                            egui::Frame::new()
-                                .fill(if tile.terrain { Color32::BROWN } else { Color32::WHITE })
-                                .show(ui, |ui| {
-                                    ui.set_width(rect_side_len);
-                                    ui.set_height(rect_side_len);
-                                });
-                        }
-                    });
+                for (point, tile) in self.terrain_grid.enumerate() {
+                    ui.painter().rect_filled(
+                        Rect::from_two_pos(
+                            corner_point + get_offset(point, Vec2::ZERO),
+                            corner_point + get_offset(point, Vec2::ONE),
+                        ),
+                        0,
+                        if tile.terrain { Color32::BROWN } else { Color32::WHITE },
+                    );
                 }
 
-                // if let Some(layout) = &self.displayed_layout {
-                //     for (_, plat) in layout.platforms() {
-                //         let Some((a, b)) = plat.area_corners() else {
-                //             continue;
-                //         };
-                //         let rect = ui.rect;
-                //
-                //         let terrain_dims = self.terrain_grid.dims();
-                //         let rect_tile_size = rect.size()
-                //             / vec2(terrain_dims.width as f32,
-                // terrain_dims.height as f32);
-                //
-                //         let a_pos_rel = rect_tile_size * vec2(a.x as f32 +
-                // 0.5, a.y as f32 + 0.5);         let b_pos_rel
-                // = rect_tile_size * vec2(a.x as f32 - 0.5, a.y as f32 - 0.5);
-                //     }
-                // }
+                if let Some(layout) = &self.displayed_layout {
+                    for (_, plat) in layout.platforms() {
+                        let Some((a, b)) = plat.area_corners() else {
+                            continue;
+                        };
+
+                        let a_pos_rel = get_offset(a, vec2(0.25, 0.25));
+                        let b_pos_rel = get_offset(b, vec2(0.75, 0.75));
+
+                        let rect =
+                            Rect::from_two_pos(corner_point + a_pos_rel, corner_point + b_pos_rel);
+                        let fill_color = Color32::DARK_GREEN * Color32::from_white_alpha(64);
+                        let border_color = Color32::DARK_GREEN * Color32::from_white_alpha(192);
+
+                        ui.painter().rect_filled(rect, 0, fill_color);
+                        ui.painter().rect_stroke(
+                            rect,
+                            0,
+                            Stroke::new(1.5f32, border_color),
+                            StrokeKind::Middle,
+                        );
+                    }
+                }
             })
         })
         .response
