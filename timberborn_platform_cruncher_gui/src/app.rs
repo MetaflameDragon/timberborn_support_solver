@@ -17,6 +17,7 @@ use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
     platform::PLATFORMS_DEFAULT,
+    platform_def,
     world::WorldGrid,
 };
 use tokio::sync::Mutex;
@@ -133,17 +134,14 @@ where
             Ok(SolverResult::Sat) => match resp.solver.full_solution() {
                 Ok(asgn) => {
                     let layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
-                    Some(SolverSessionResult::Sat { layout })
+                    Some(SolverSessionResult::Sat { layout, limits: resp.limits })
                 }
                 Err(err) => {
                     error!("Failed to get assignment, but the solver reported SAT: {:?}", err);
                     None
                 }
             },
-            Ok(SolverResult::Unsat) => {
-                info!("Unsat");
-                Some(SolverSessionResult::Unsat)
-            }
+            Ok(SolverResult::Unsat) => Some(SolverSessionResult::Unsat),
             Ok(SolverResult::Interrupted) => {
                 info!("Solver interrupted");
                 None
@@ -154,11 +152,22 @@ where
             }
         }
     }
+    fn start_solver(&mut self, limits: PlatformLimits)
+    where
+        S: Solve + Default + Send + 'static,
+    {
+        let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
+        let encoding = Encoding::encode(&PLATFORMS_DEFAULT, &world_grid);
+
+        if let Err(err) = self.backend.start(encoding, limits) {
+            error!("Failed to start solver: {err}");
+        }
+    }
 }
 
 #[derive(Debug)]
 enum SolverSessionResult {
-    Sat { layout: PlatformLayout },
+    Sat { layout: PlatformLayout, limits: PlatformLimits },
     Unsat,
 }
 
@@ -174,9 +183,12 @@ where
             Some(SolverSessionResult::Unsat) => {
                 info!("Unsat");
             }
-            Some(SolverSessionResult::Sat { layout }) => {
+            Some(SolverSessionResult::Sat { layout, mut limits }) => {
                 info!("Sat\n{layout:#?}");
+                limits.entry(platform_def!(1, 1)).insert_entry(layout.platform_count() - 1);
+
                 self.displayed_layout = Some(layout);
+                self.start_solver(limits);
             }
         };
 
@@ -223,13 +235,7 @@ where
                 Button::new(RichText::new("Solve").color(Color32::GREEN).size(24f32)).ui(ui);
 
             if solve_btn_resp.clicked() {
-                let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
-                let encoding = Encoding::encode(&PLATFORMS_DEFAULT, &world_grid);
-                let limits = PlatformLimits::new(HashMap::new());
-
-                if let Err(err) = self.backend.start(encoding, limits) {
-                    error!("Failed to start solver: {err}");
-                }
+                self.start_solver(Default::default());
             }
         });
     }
