@@ -43,6 +43,7 @@ where
     rt: tokio::runtime::Runtime,
     session: Option<Session<S>>,
     interrupter: Option<S::Interrupter>,
+    egui_ctx: Option<egui::Context>,
 }
 
 struct Session<S> {
@@ -63,7 +64,11 @@ where
     S: Interrupt,
 {
     pub fn new(rt: tokio::runtime::Runtime) -> Self {
-        Self { rt, session: None, interrupter: None }
+        Self { rt, session: None, interrupter: None, egui_ctx: None }
+    }
+
+    pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
+        self.egui_ctx = Some(ctx);
     }
 
     pub fn start(&mut self, encoding: Encoding, limits: PlatformLimits) -> anyhow::Result<()>
@@ -79,9 +84,13 @@ where
         self.session = Some(Session { encoding, limits, rx });
 
         _ = self.rt.spawn_blocking({
+            let ctx = self.egui_ctx.clone();
             move || {
                 // If sending fails, the backend has dropped the receiver
                 _ = tx.send((solver.solve(), solver));
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
             }
         });
         Ok(())

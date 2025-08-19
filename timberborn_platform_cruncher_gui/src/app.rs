@@ -48,8 +48,9 @@ impl<S> App<S>
 where
     S: Interrupt,
 {
-    pub fn new(cc: &eframe::CreationContext<'_>, backend: SolverBackend<S>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend<S>) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
+        backend.set_egui_ctx(cc.egui_ctx.clone());
 
         App {
             terrain_grid,
@@ -193,6 +194,7 @@ where
             debug_assert!(!self.terrain_grid.dims().empty());
 
             let resp = self.draw_terrain_grid_ui(ui);
+
             if resp.dragged()
                 && let Some(pos) = resp.interact_pointer_pos()
             {
