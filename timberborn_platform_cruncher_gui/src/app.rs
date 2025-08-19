@@ -5,7 +5,7 @@ use anyhow::Context as _;
 use eframe::Frame;
 use egui::{
     Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, Ui, UiBuilder, Vec2, Widget, pos2, vec2,
+    Stroke, StrokeKind, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2, vec2,
 };
 use itertools::Itertools;
 use log::{error, info};
@@ -250,6 +250,7 @@ struct PlatformTypeSelector {
     platform_defs: Vec<PlatformDefItem>,
     new_platform_str: String,
     focus_text_next_frame: bool,
+    text_box_show_err: bool,
 }
 
 struct PlatformDefItem {
@@ -271,6 +272,7 @@ impl PlatformTypeSelector {
             platform_defs: platform_defs.into_iter().map(PlatformDefItem::new_active).collect(),
             new_platform_str: String::new(),
             focus_text_next_frame: false,
+            text_box_show_err: false,
         }
     }
 
@@ -299,22 +301,32 @@ impl PlatformTypeSelector {
             // Last row with an entry box
             ui.horizontal(|ui| {
                 let plus_clicked = ui.button("+").clicked();
-                let text_edit = ui.text_edit_singleline(&mut self.new_platform_str);
+
+                let text_edit = TextEdit::singleline(&mut self.new_platform_str)
+                    .text_color_opt(self.text_box_show_err.then_some(Color32::RED))
+                    .show(ui);
+
                 if self.focus_text_next_frame {
                     self.focus_text_next_frame = false;
-                    text_edit.request_focus();
+                    text_edit.response.request_focus();
+                }
+
+                if text_edit.response.lost_focus() || text_edit.response.changed() {
+                    self.text_box_show_err = false;
                 }
 
                 if plus_clicked
-                    || text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    || text_edit.response.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
                 {
                     if let Some(def) = try_parse_platform_def(&self.new_platform_str) {
                         self.platform_defs.push(PlatformDefItem::new_active(def));
+                        self.new_platform_str.clear();
                     } else {
                         info!("Failed to parse platform definition");
+                        self.text_box_show_err = true;
                     }
 
-                    self.new_platform_str.clear();
                     self.focus_text_next_frame = true;
                 }
             });
@@ -329,8 +341,8 @@ impl PlatformTypeSelector {
 }
 
 fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
-    let (a, b) = input.split_once('x')?;
-    let (a, b) = (a.parse().ok()?, b.parse().ok()?);
+    let (a, b) = input.trim().split_once('x')?;
+    let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
     Some(PlatformDef::new(Dimensions::new(a, b)))
 }
 
