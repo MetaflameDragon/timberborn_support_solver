@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use eframe::epaint::Color32;
-use egui::{TextEdit, Ui};
+use egui::{RichText, TextEdit, Ui};
 use log::info;
 use timberborn_platform_cruncher::{math::Dimensions, platform::PlatformDef};
 
@@ -11,25 +11,29 @@ pub struct PlatformTypeSelector {
     platform_defs: BTreeMap<PlatformDefOrdered, PlatformDefItemData>,
     new_platform_str: String,
     focus_text_next_frame: bool,
-    text_box_feedback: Option<TextBoxFeedbackKind>,
+    text_box_feedback: Option<EntryFeedback>,
 }
 
 #[derive(Clone, Debug)]
-enum TextBoxFeedbackKind {
-    Error,
-    Warning,
+enum EntryFeedback {
+    ParseError,
+    Duplicate(PlatformDef),
 }
 
-impl TextBoxFeedbackKind {
+impl EntryFeedback {
     pub fn as_color(&self) -> Color32 {
         match self {
-            TextBoxFeedbackKind::Error => Color32::RED,
-            TextBoxFeedbackKind::Warning => Color32::ORANGE,
+            EntryFeedback::ParseError => Color32::RED,
+            EntryFeedback::Duplicate(_) => Color32::ORANGE,
         }
+    }
+
+    pub fn is_duplicate(&self, def: PlatformDef) -> bool {
+        if let EntryFeedback::Duplicate(duplicate) = self { *duplicate == def } else { false }
     }
 }
 
-#[derive(Copy, Clone, Debug, Hash)]
+#[derive(Copy, Clone, Debug)]
 struct PlatformDefOrdered(pub PlatformDef);
 
 #[derive(Clone, Debug)]
@@ -89,7 +93,7 @@ impl PlatformTypeSelector {
         ui.vertical(|ui| {
             // Rows with all platforms
             // Items are removed by returning false from the closure
-            &mut self.platform_defs.retain(|def, data| {
+            self.platform_defs.retain(|def, data| {
                 let dims = def.0.dims();
                 // Disable removal/deactivation for 1x1 platforms,
                 // as a lot of logic assumes that they're always available
@@ -98,7 +102,15 @@ impl PlatformTypeSelector {
                     ui.horizontal(|ui| {
                         let should_keep = !ui.button("X").clicked();
                         ui.checkbox(&mut data.active, egui::Atom::default());
-                        ui.label(format!("{}x{}", dims.width(), dims.height()));
+                        let label_text =
+                            RichText::new(format!("{}x{}", dims.width(), dims.height())).color(
+                                // Highlight if a duplicate entry warning is being shown
+                                self.text_box_feedback
+                                    .as_ref()
+                                    .and_then(|f| f.is_duplicate(def.0).then_some(f.as_color()))
+                                    .unwrap_or(Color32::PLACEHOLDER),
+                            );
+                        ui.label(label_text);
 
                         should_keep
                     })
@@ -137,11 +149,11 @@ impl PlatformTypeSelector {
                             dbg!(&self.platform_defs);
                             self.new_platform_str.clear();
                         } else {
-                            self.text_box_feedback = Some(TextBoxFeedbackKind::Warning);
+                            self.text_box_feedback = Some(EntryFeedback::Duplicate(def));
                         }
                     } else {
                         info!("Failed to parse platform definition");
-                        self.text_box_feedback = Some(TextBoxFeedbackKind::Error);
+                        self.text_box_feedback = Some(EntryFeedback::ParseError);
                     }
 
                     self.focus_text_next_frame = true;
@@ -151,8 +163,8 @@ impl PlatformTypeSelector {
     }
 
     pub fn active_platform_defs(&self) -> impl Iterator<Item = PlatformDef> {
-        self.platform_defs.iter().filter_map(|(def, &PlatformDefItemData { active, .. })| {
-            active.then_some(def.0.clone())
-        })
+        self.platform_defs
+            .iter()
+            .filter_map(|(def, &PlatformDefItemData { active, .. })| active.then_some(def.0))
     }
 }
