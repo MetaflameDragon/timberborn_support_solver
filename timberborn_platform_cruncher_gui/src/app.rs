@@ -248,12 +248,19 @@ where
 
 struct PlatformTypeSelector {
     platform_defs: Vec<PlatformDefItem>,
+    new_platform_str: String,
+    focus_text_next_frame: bool,
 }
 
 struct PlatformDefItem {
     def: PlatformDef,
     active: bool,
-    should_remove: bool,
+}
+
+impl PlatformDefItem {
+    pub fn new_active(def: PlatformDef) -> Self {
+        Self { def, active: true }
+    }
 }
 
 impl PlatformTypeSelector {
@@ -261,25 +268,56 @@ impl PlatformTypeSelector {
         platform_defs: impl IntoIterator<Item = PlatformDef>,
     ) -> PlatformTypeSelector {
         Self {
-            platform_defs: platform_defs
-                .into_iter()
-                .map(|def| PlatformDefItem { def, active: true, should_remove: false })
-                .collect(),
+            platform_defs: platform_defs.into_iter().map(PlatformDefItem::new_active).collect(),
+            new_platform_str: String::new(),
+            focus_text_next_frame: false,
         }
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
-            for plat in &mut self.platform_defs {
+            // Rows with all platforms
+            // Items are removed by returning false from the closure
+            &mut self.platform_defs.retain_mut(|plat| {
                 let dims = plat.def.dims();
-                ui.add_enabled_ui(dims != Dimensions::new(1, 1), |ui| {
+                // Disable removal/deactivation for 1x1 platforms,
+                // as a lot of logic assumes that they're always available
+                let disable_controls = dims != Dimensions::new(1, 1);
+                ui.add_enabled_ui(disable_controls, |ui| {
                     ui.horizontal(|ui| {
-                        plat.should_remove = ui.button("X").clicked();
+                        let should_keep = !ui.button("X").clicked();
                         ui.checkbox(&mut plat.active, egui::Atom::default());
                         ui.label(format!("{}x{}", dims.width(), dims.height()));
+
+                        should_keep
                     })
-                });
-            }
+                    .inner
+                })
+                .inner
+            });
+
+            // Last row with an entry box
+            ui.horizontal(|ui| {
+                let plus_clicked = ui.button("+").clicked();
+                let text_edit = ui.text_edit_singleline(&mut self.new_platform_str);
+                if self.focus_text_next_frame {
+                    self.focus_text_next_frame = false;
+                    text_edit.request_focus();
+                }
+
+                if plus_clicked
+                    || text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    if let Some(def) = try_parse_platform_def(&self.new_platform_str) {
+                        self.platform_defs.push(PlatformDefItem::new_active(def));
+                    } else {
+                        info!("Failed to parse platform definition");
+                    }
+
+                    self.new_platform_str.clear();
+                    self.focus_text_next_frame = true;
+                }
+            });
         });
     }
 
@@ -288,6 +326,12 @@ impl PlatformTypeSelector {
             .iter()
             .filter_map(|&PlatformDefItem { def, active, .. }| active.then_some(def))
     }
+}
+
+fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
+    let (a, b) = input.split_once('x')?;
+    let (a, b) = (a.parse().ok()?, b.parse().ok()?);
+    Some(PlatformDef::new(Dimensions::new(a, b)))
 }
 
 #[derive(Clone, Default, Debug)]
