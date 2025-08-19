@@ -108,8 +108,9 @@ where
 
                         let rect =
                             Rect::from_two_pos(corner_point + a_pos_rel, corner_point + b_pos_rel);
-                        let fill_color = Color32::DARK_GREEN * Color32::from_white_alpha(64);
-                        let border_color = Color32::DARK_GREEN * Color32::from_white_alpha(192);
+                        let platform_color = Color32::DARK_BLUE;
+                        let fill_color = platform_color * Color32::from_white_alpha(80);
+                        let border_color = platform_color * Color32::from_white_alpha(212);
 
                         ui.painter().rect_filled(rect, 0, fill_color);
                         ui.painter().rect_stroke(
@@ -185,10 +186,12 @@ where
             }
             Some(SolverSessionResult::Sat { layout, mut limits }) => {
                 info!("Sat\n{layout:#?}");
-                limits.entry(platform_def!(1, 1)).insert_entry(layout.platform_count() - 1);
+                if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
+                    limits.entry(platform_def!(1, 1)).insert_entry(platform_count_limit);
+                    self.start_solver(limits);
+                }
 
                 self.displayed_layout = Some(layout);
-                self.start_solver(limits);
             }
         };
 
