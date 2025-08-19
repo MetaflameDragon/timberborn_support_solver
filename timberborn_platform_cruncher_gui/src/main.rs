@@ -1,12 +1,7 @@
-use anyhow::Context;
-use futures::FutureExt;
-use log::{error, info, warn};
-use rustsat::solvers::{Interrupt, InterruptSolver, Solve, SolveStats, SolverResult};
+use log::warn;
+use rustsat::solvers::{Interrupt, InterruptSolver, Solve, SolverResult};
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
-use timberborn_platform_cruncher::{
-    encoder::{Encoding, PlatformLayout, PlatformLimits},
-    *,
-};
+use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
 use tokio::sync::{oneshot, oneshot::error::TryRecvError};
 
 mod app;
@@ -104,7 +99,7 @@ where
         }
     }
 
-    pub fn try_recv<'a>(&mut self) -> Option<SolverResponse<S>> {
+    pub fn try_recv(&mut self) -> Option<SolverResponse<S>> {
         // Both empty and closed is okay
         // Closed also implies the value has already been received
         let session = self.session.as_mut()?;

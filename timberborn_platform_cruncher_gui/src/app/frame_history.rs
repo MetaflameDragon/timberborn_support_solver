@@ -15,6 +15,7 @@ impl Default for FrameHistory {
     }
 }
 
+#[allow(dead_code)]
 impl FrameHistory {
     // Called first
     pub fn on_new_frame(&mut self, now: f64, previous_frame_time: Option<f32>) {

@@ -1,17 +1,14 @@
-use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
+use std::ops::ControlFlow;
 
-use anyhow::{Context as _, anyhow, bail};
-use eframe::{Frame, Storage, emath::pos2, epaint::StrokeKind};
+#[allow(unused_imports)] // Keeping this Anyhow import as Context would clash with egui
+use anyhow::Context as _;
+use eframe::Frame;
 use egui::{
-    Button, Color32, Context, DragValue, Modal, PointerButton, Pos2, Rect, Response, RichText,
-    Sense, Shape, Stroke, Ui, UiBuilder, Vec2, Widget, vec2,
+    Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
+    Stroke, StrokeKind, Ui, UiBuilder, Vec2, Widget, pos2, vec2,
 };
-use futures::{FutureExt, TryFutureExt, future::BoxFuture};
-use log::{error, info, warn};
-use rustsat::{
-    instances::Cnf,
-    solvers::{Interrupt, Solve, SolveStats, SolverResult},
-};
+use log::{error, info};
+use rustsat::solvers::{Interrupt, Solve, SolveStats, SolverResult};
 use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
@@ -19,8 +16,6 @@ use timberborn_platform_cruncher::{
     platform_def,
     world::WorldGrid,
 };
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 use crate::{SolverBackend, app::frame_history::FrameHistory};
 
@@ -41,8 +36,6 @@ where
     displayed_layout: Option<PlatformLayout>,
     frame_history: FrameHistory,
 }
-
-struct CanvasClickQueue {}
 
 impl<S> App<S>
 where
@@ -97,7 +90,7 @@ where
                 }
 
                 if let Some(layout) = &self.displayed_layout {
-                    for (_, plat) in layout.platforms() {
+                    for plat in layout.platforms().values() {
                         let Some((a, b)) = plat.area_corners() else {
                             continue;
                         };
@@ -137,7 +130,7 @@ where
                     Some(SolverSessionResult::Sat { layout, limits: resp.limits })
                 }
                 Err(err) => {
-                    error!("Failed to get assignment, but the solver reported SAT: {:?}", err);
+                    error!("Failed to get assignment, but the solver reported SAT: {err:?}");
                     None
                 }
             },
@@ -147,7 +140,7 @@ where
                 None
             }
             Err(err) => {
-                error!("Solver error: {:?}", err);
+                error!("Solver error: {err:?}");
                 None
             }
         }
@@ -230,7 +223,7 @@ where
                         tile.terrain = false;
                     }
                 }
-                info!("{:?}", tile_index);
+                info!("{tile_index:?}");
             }
 
             let solve_btn_resp =
@@ -241,8 +234,6 @@ where
             }
         });
     }
-
-    fn save(&mut self, storage: &mut dyn Storage) {}
 }
 
 #[derive(Clone, Default, Debug)]
