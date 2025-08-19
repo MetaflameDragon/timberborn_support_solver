@@ -1127,13 +1127,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui_canvas"
-version = "0.1.2"
-dependencies = [
- "egui",
-]
-
-[[package]]
 name = "egui_glow"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3364,7 +3357,6 @@ dependencies = [
  "derive_more",
  "eframe",
  "egui",
- "egui_canvas",
  "env_logger",
  "futures",
  "itertools 0.14.0",

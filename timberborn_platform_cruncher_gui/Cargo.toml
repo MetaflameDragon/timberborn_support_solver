@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 timberborn_platform_cruncher = { path = "../." }
 egui = "0.32.1"
-egui_canvas = "0.1.2"
 log = "0.4.27"
 env_logger = "0.11.8"
 rustsat-glucose = { version = "0.7.2", features = [] }

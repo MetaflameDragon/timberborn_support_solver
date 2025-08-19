@@ -41,6 +41,3 @@ petgraph = "0.8.2"
 itertools = "0.14.0"
 static_assertions = "1.1.0"
 owo-colors = "4.2.2"
-
-[patch.crates-io]
-egui_canvas = { path = "../egui_canvas" } # TODO Needs to be PR'd or otherwise published!

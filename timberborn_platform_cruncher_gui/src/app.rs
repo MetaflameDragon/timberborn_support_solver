@@ -6,7 +6,6 @@ use egui::{
     Button, Color32, Context, DragValue, Modal, PointerButton, Pos2, Rect, Response, RichText,
     Sense, Shape, Stroke, Ui, UiBuilder, Vec2, Widget, vec2,
 };
-use egui_canvas::Canvas;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
 use log::{error, info, warn};
 use rustsat::{
