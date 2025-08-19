@@ -1,4 +1,8 @@
-use std::ops::ControlFlow;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    ops::ControlFlow,
+};
 
 #[allow(unused_imports)] // Keeping this Anyhow import as Context would clash with egui
 use anyhow::Context as _;
@@ -247,20 +251,63 @@ where
 }
 
 struct PlatformTypeSelector {
-    platform_defs: Vec<PlatformDefItem>,
+    platform_defs: BTreeMap<PlatformDefOrdered, PlatformDefItemData>,
     new_platform_str: String,
     focus_text_next_frame: bool,
-    text_box_show_err: bool,
+    text_box_feedback: Option<TextBoxFeedbackKind>,
 }
 
-struct PlatformDefItem {
-    def: PlatformDef,
+#[derive(Clone, Debug)]
+enum TextBoxFeedbackKind {
+    Error,
+    Warning,
+}
+
+impl TextBoxFeedbackKind {
+    pub fn as_color(&self) -> Color32 {
+        match self {
+            TextBoxFeedbackKind::Error => Color32::RED,
+            TextBoxFeedbackKind::Warning => Color32::ORANGE,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash)]
+struct PlatformDefOrdered(pub PlatformDef);
+
+#[derive(Clone, Debug)]
+struct PlatformDefItemData {
     active: bool,
 }
 
-impl PlatformDefItem {
-    pub fn new_active(def: PlatformDef) -> Self {
-        Self { def, active: true }
+impl PartialEq for PlatformDefOrdered {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.dims().eq(&other.0.dims())
+    }
+}
+
+impl Eq for PlatformDefOrdered {}
+
+impl Ord for PlatformDefOrdered {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_dims = self.0.dims();
+        let other_dims = other.0.dims();
+        match (self_dims.width.cmp(&other_dims.width), self_dims.height.cmp(&other_dims.height)) {
+            (Ordering::Equal, height_cmp) => height_cmp,
+            (width_cmp, _) => width_cmp,
+        }
+    }
+}
+
+impl PartialOrd for PlatformDefOrdered {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PlatformDefItemData {
+    pub fn new_active() -> Self {
+        Self { active: true }
     }
 }
 
@@ -268,11 +315,16 @@ impl PlatformTypeSelector {
     pub fn with_defaults(
         platform_defs: impl IntoIterator<Item = PlatformDef>,
     ) -> PlatformTypeSelector {
+        let platform_defs_btree = platform_defs
+            .into_iter()
+            .map(|def| (PlatformDefOrdered(def), PlatformDefItemData::new_active()))
+            .collect();
+        dbg!(&platform_defs_btree);
         Self {
-            platform_defs: platform_defs.into_iter().map(PlatformDefItem::new_active).collect(),
+            platform_defs: platform_defs_btree,
             new_platform_str: String::new(),
             focus_text_next_frame: false,
-            text_box_show_err: false,
+            text_box_feedback: None,
         }
     }
 
@@ -280,15 +332,15 @@ impl PlatformTypeSelector {
         ui.vertical(|ui| {
             // Rows with all platforms
             // Items are removed by returning false from the closure
-            &mut self.platform_defs.retain_mut(|plat| {
-                let dims = plat.def.dims();
+            &mut self.platform_defs.retain(|def, data| {
+                let dims = def.0.dims();
                 // Disable removal/deactivation for 1x1 platforms,
                 // as a lot of logic assumes that they're always available
                 let disable_controls = dims != Dimensions::new(1, 1);
                 ui.add_enabled_ui(disable_controls, |ui| {
                     ui.horizontal(|ui| {
                         let should_keep = !ui.button("X").clicked();
-                        ui.checkbox(&mut plat.active, egui::Atom::default());
+                        ui.checkbox(&mut data.active, egui::Atom::default());
                         ui.label(format!("{}x{}", dims.width(), dims.height()));
 
                         should_keep
@@ -303,7 +355,7 @@ impl PlatformTypeSelector {
                 let plus_clicked = ui.button("+").clicked();
 
                 let text_edit = TextEdit::singleline(&mut self.new_platform_str)
-                    .text_color_opt(self.text_box_show_err.then_some(Color32::RED))
+                    .text_color_opt(self.text_box_feedback.as_ref().map(|x| x.as_color()))
                     .show(ui);
 
                 if self.focus_text_next_frame {
@@ -312,7 +364,7 @@ impl PlatformTypeSelector {
                 }
 
                 if text_edit.response.lost_focus() || text_edit.response.changed() {
-                    self.text_box_show_err = false;
+                    self.text_box_feedback = None;
                 }
 
                 if plus_clicked
@@ -320,11 +372,19 @@ impl PlatformTypeSelector {
                         && ui.input(|i| i.key_pressed(egui::Key::Enter))
                 {
                     if let Some(def) = try_parse_platform_def(&self.new_platform_str) {
-                        self.platform_defs.push(PlatformDefItem::new_active(def));
-                        self.new_platform_str.clear();
+                        if self
+                            .platform_defs
+                            .insert(PlatformDefOrdered(def), PlatformDefItemData::new_active())
+                            .is_none()
+                        {
+                            dbg!(&self.platform_defs);
+                            self.new_platform_str.clear();
+                        } else {
+                            self.text_box_feedback = Some(TextBoxFeedbackKind::Warning);
+                        }
                     } else {
                         info!("Failed to parse platform definition");
-                        self.text_box_show_err = true;
+                        self.text_box_feedback = Some(TextBoxFeedbackKind::Error);
                     }
 
                     self.focus_text_next_frame = true;
@@ -334,16 +394,16 @@ impl PlatformTypeSelector {
     }
 
     pub fn active_platform_defs(&self) -> impl Iterator<Item = PlatformDef> {
-        self.platform_defs
-            .iter()
-            .filter_map(|&PlatformDefItem { def, active, .. }| active.then_some(def))
+        self.platform_defs.iter().filter_map(|(def, &PlatformDefItemData { active, .. })| {
+            active.then_some(def.0.clone())
+        })
     }
 }
 
 fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
     let (a, b) = input.trim().split_once('x')?;
     let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
-    Some(PlatformDef::new(Dimensions::new(a, b)))
+    (a > 0 && b > 0).then_some(PlatformDef::new(Dimensions::new(a, b)))
 }
 
 #[derive(Clone, Default, Debug)]
