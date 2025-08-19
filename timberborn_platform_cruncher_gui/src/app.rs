@@ -7,12 +7,13 @@ use egui::{
     Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
     Stroke, StrokeKind, Ui, UiBuilder, Vec2, Widget, pos2, vec2,
 };
+use itertools::Itertools;
 use log::{error, info};
 use rustsat::solvers::{Interrupt, Solve, SolveStats, SolverResult};
 use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
-    platform::PLATFORMS_DEFAULT,
+    platform::{PLATFORMS_DEFAULT, PlatformDef},
     platform_def,
     world::WorldGrid,
 };
@@ -35,6 +36,7 @@ where
     backend: SolverBackend<S>,
     displayed_layout: Option<PlatformLayout>,
     frame_history: FrameHistory,
+    platform_type_selector: PlatformTypeSelector,
 }
 
 impl<S> App<S>
@@ -51,6 +53,7 @@ where
             backend,
             displayed_layout: None,
             frame_history: FrameHistory::default(),
+            platform_type_selector: PlatformTypeSelector::with_defaults(PLATFORMS_DEFAULT.to_vec()),
         }
     }
 
@@ -150,7 +153,10 @@ where
         S: Solve + Default + Send + 'static,
     {
         let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
-        let encoding = Encoding::encode(&PLATFORMS_DEFAULT, &world_grid);
+        let encoding = Encoding::encode(
+            &self.platform_type_selector.active_platform_defs().collect_vec(),
+            &world_grid,
+        );
 
         if let Err(err) = self.backend.start(encoding, limits) {
             error!("Failed to start solver: {err}");
@@ -186,6 +192,10 @@ where
                 self.displayed_layout = Some(layout);
             }
         };
+
+        egui::SidePanel::left("left panel").show(ctx, |ui| {
+            self.platform_type_selector.ui(ui);
+        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.frame_history.ui(ui);
@@ -233,6 +243,50 @@ where
                 self.start_solver(Default::default());
             }
         });
+    }
+}
+
+struct PlatformTypeSelector {
+    platform_defs: Vec<PlatformDefItem>,
+}
+
+struct PlatformDefItem {
+    def: PlatformDef,
+    active: bool,
+    should_remove: bool,
+}
+
+impl PlatformTypeSelector {
+    pub fn with_defaults(
+        platform_defs: impl IntoIterator<Item = PlatformDef>,
+    ) -> PlatformTypeSelector {
+        Self {
+            platform_defs: platform_defs
+                .into_iter()
+                .map(|def| PlatformDefItem { def, active: true, should_remove: false })
+                .collect(),
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        ui.vertical(|ui| {
+            for plat in &mut self.platform_defs {
+                let dims = plat.def.dims();
+                ui.add_enabled_ui(dims != Dimensions::new(1, 1), |ui| {
+                    ui.horizontal(|ui| {
+                        plat.should_remove = ui.button("X").clicked();
+                        ui.checkbox(&mut plat.active, egui::Atom::default());
+                        ui.label(format!("{}x{}", dims.width(), dims.height()));
+                    })
+                });
+            }
+        });
+    }
+
+    pub fn active_platform_defs(&self) -> impl Iterator<Item = PlatformDef> {
+        self.platform_defs
+            .iter()
+            .filter_map(|&PlatformDefItem { def, active, .. }| active.then_some(def))
     }
 }
 
