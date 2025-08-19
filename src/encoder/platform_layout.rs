@@ -17,7 +17,7 @@ use crate::{
     world::World,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PlatformLayout {
     platforms: HashMap<Point, Platform>,
 }

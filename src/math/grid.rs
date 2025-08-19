@@ -20,11 +20,25 @@ impl<T> Grid<T> {
         self.data.chunks_exact(self.dims.width)
     }
 
+    pub fn iter_rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
+        debug_assert_eq!(self.data.len() % self.dims.width, 0);
+        self.data.chunks_exact_mut(self.dims.width)
+    }
+
     pub fn from_fn<F>(dims: Dimensions, map_fn: F) -> Self
     where
         F: FnMut(Point) -> T,
     {
         Grid { data: dims.iter_within().map(map_fn).collect(), dims }
+    }
+
+    /// Creates a new grid from an existing one by applying a function to each
+    /// item.
+    pub fn iter_map<F, U>(&self, map_fn: F) -> Grid<U>
+    where
+        F: FnMut(&T) -> U,
+    {
+        Grid { data: self.iter().map(map_fn).collect(), dims: self.dims }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {

@@ -1,0 +1,21 @@
+[package]
+name = "timberborn_platform_cruncher_gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+timberborn_platform_cruncher = { path = "../." }
+egui = "0.32.1"
+log = "0.4.27"
+env_logger = "0.11.8"
+rustsat-glucose = { version = "0.7.2", features = [] }
+rustsat = { version = "0.7.2", features = [] }
+anyhow = "1.0.98"
+futures = "0.3.31"
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
+serde = { version = "1.0.219", features = ["derive"] }
+toml = "0.9.4"
+tokio-util = "0.7.16"
+itertools = "0.14.0"
+derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from", "is_variant"] }
+eframe = "0.32.1"

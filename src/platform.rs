@@ -14,9 +14,10 @@ pub struct PlatformDef {
 
 #[macro_export]
 macro_rules! platform_def {
-    ($x:literal, $y:literal) => {
+    ($x:literal, $y:literal) => {{
+        use $crate::platform::PlatformDef;
         PlatformDef::new(Dimensions::new($x, $y))
-    };
+    }};
 }
 
 pub const PLATFORMS_DEFAULT: [PlatformDef; 8] = [

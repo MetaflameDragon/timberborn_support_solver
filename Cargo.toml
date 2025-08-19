@@ -1,3 +1,6 @@
+[workspace]
+members = ["timberborn_platform_cruncher_gui"]
+
 [package]
 name = "timberborn_platform_cruncher"
 version = "0.1.0"
@@ -8,6 +11,8 @@ resolver = "3"
 name = "timberborn_platform_cruncher"
 
 [lib]
+
+
 
 [dependencies]
 rustsat-glucose = { version = "0.7.2", features = [] }
