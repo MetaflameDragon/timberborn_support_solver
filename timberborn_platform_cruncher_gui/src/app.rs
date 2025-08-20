@@ -312,6 +312,10 @@ where
             });
         });
     }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.active_session.take().map(|mut session| session.interrupt());
+    }
 }
 
 fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
