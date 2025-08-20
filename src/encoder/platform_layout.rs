@@ -59,13 +59,6 @@ impl PlatformLayout {
         self.platforms.len()
     }
 
-    pub fn platform_weight_sum(&self, weights: &HashMap<PlatformDef, isize>) -> isize {
-        self.platform_stats()
-            .iter()
-            .map(|(&def, &n)| weights.get(&def).map_or(0, |&w| w * (n.get() as isize)))
-            .sum()
-    }
-
     /// Counts the number of occurrences of all platform types and returns them
     /// as a HashMap.
     ///

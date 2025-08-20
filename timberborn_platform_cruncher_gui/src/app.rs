@@ -1,17 +1,21 @@
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Range};
 
 #[allow(unused_imports)] // Keeping this Anyhow import as Context would clash with egui
 use anyhow::Context as _;
 use eframe::Frame;
 use egui::{
     Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, Ui, UiBuilder, Vec2, Widget, pos2, vec2,
+    Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, Widget, pos2, util::History, vec2,
 };
 use itertools::Itertools;
 use log::{error, info};
 use platform_type_selector::PlatformTypeSelector;
-use rustsat::solvers::{Interrupt, Solve, SolveStats, SolverResult};
+use rustsat::{
+    solvers::{Interrupt, Solve, SolveStats, SolverResult},
+    types::{Assignment, TernaryVal},
+};
 use timberborn_platform_cruncher::{
+    encoder,
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
     platform::{PLATFORMS_DEFAULT, PlatformDef},
@@ -19,7 +23,7 @@ use timberborn_platform_cruncher::{
     world::WorldGrid,
 };
 
-use crate::{SolverBackend, app::frame_history::FrameHistory};
+use crate::{SolverBackend, SolverResponse, SolverSession, app::frame_history::FrameHistory};
 
 mod frame_history;
 mod platform_type_selector;
@@ -35,8 +39,10 @@ where
 {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
-    backend: SolverBackend<S>,
+    backend: SolverBackend,
+    active_session: Option<SolverSession<S>>,
     displayed_layout: Option<PlatformLayout>,
+    layout_stats: PlatformLayoutStats,
     frame_history: FrameHistory,
     platform_type_selector: PlatformTypeSelector,
 }
@@ -45,7 +51,7 @@ impl<S> App<S>
 where
     S: Interrupt,
 {
-    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend<S>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
         backend.set_egui_ctx(cc.egui_ctx.clone());
 
@@ -53,8 +59,10 @@ where
             terrain_grid,
             resize_modal: Default::default(),
             backend,
+            active_session: None,
             displayed_layout: None,
             frame_history: FrameHistory::default(),
+            layout_stats: PlatformLayoutStats::new(5..100, 5.0),
             platform_type_selector: PlatformTypeSelector::with_defaults(PLATFORMS_DEFAULT.to_vec()),
         }
     }
@@ -123,16 +131,16 @@ where
         .response
     }
 
-    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult>
+    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult<S>>
     where
         S: Solve + SolveStats,
     {
-        let resp = self.backend.try_recv()?;
+        let resp = SolverSession::try_recv(&mut self.active_session)?;
         match resp.result {
             Ok(SolverResult::Sat) => match resp.solver.full_solution() {
                 Ok(asgn) => {
                     let layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
-                    Some(SolverSessionResult::Sat { layout, limits: resp.limits })
+                    Some(SolverSessionResult::Sat { layout, response: resp, assignment: asgn })
                 }
                 Err(err) => {
                     error!("Failed to get assignment, but the solver reported SAT: {err:?}");
@@ -160,15 +168,20 @@ where
             &world_grid,
         );
 
-        if let Err(err) = self.backend.start(encoding, limits) {
-            error!("Failed to start solver: {err}");
-        }
+        self.active_session.take().map(|mut session| session.interrupt());
+        self.active_session = self
+            .backend
+            .start(encoding, limits)
+            .map_err(|err| {
+                error!("Failed to start solver: {err}");
+            })
+            .ok();
     }
 }
 
 #[derive(Debug)]
-enum SolverSessionResult {
-    Sat { layout: PlatformLayout, limits: PlatformLimits },
+enum SolverSessionResult<S> {
+    Sat { layout: PlatformLayout, response: SolverResponse<S>, assignment: Assignment },
     Unsat,
 }
 
@@ -184,7 +197,11 @@ where
             Some(SolverSessionResult::Unsat) => {
                 info!("Unsat");
             }
-            Some(SolverSessionResult::Sat { layout, mut limits }) => {
+            Some(SolverSessionResult::Sat {
+                layout,
+                response: SolverResponse { mut limits, encoding, .. },
+                assignment,
+            }) => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
                 // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
@@ -194,10 +211,17 @@ where
                 //         .insert_entry(platform_count_limit);
                 //     self.start_solver(limits);
                 // }
-                let weight = layout.platform_weight_sum(&limits.weights);
+
+                let weight =
+                    encoder::assignment_total_weight(&assignment, encoding.vars(), &limits.weights);
+
                 info!("Got a solution with weight {weight}");
-                if let Some(weight) = weight.checked_sub(1) {
-                    limits.weight_limit = Some(weight);
+                self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
+
+                if let Some(weight_subtracted) = weight.checked_sub(1)
+                    && weight_subtracted > 0
+                {
+                    limits.weight_limit = Some(weight_subtracted);
                     self.start_solver(limits);
                 }
 
@@ -248,28 +272,44 @@ where
                 info!("{tile_index:?}");
             }
 
-            let solve_btn_resp =
-                Button::new(RichText::new("Solve").color(Color32::GREEN).size(24f32)).ui(ui);
+            ui.horizontal(|ui| {
+                let solve_btn_resp =
+                    Button::new(RichText::new("Solve").color(Color32::GREEN).size(24f32)).ui(ui);
 
-            if solve_btn_resp.clicked() {
-                let limits = PlatformLimits::new_with_weights(
-                    Default::default(),
-                    [
-                        (platform_def!(1, 1), 1),
-                        (platform_def!(1, 2), 1),
-                        (platform_def!(1, 3), 1),
-                        (platform_def!(1, 4), 1),
-                        (platform_def!(1, 5), 1),
-                        (platform_def!(1, 6), 1),
-                        (platform_def!(3, 3), 1),
-                        (platform_def!(5, 5), 1),
-                    ]
-                    .into_iter()
-                    .collect(),
-                    None,
-                );
-                self.start_solver(limits);
-            }
+                if solve_btn_resp.clicked() {
+                    let limits = PlatformLimits::new_with_weights(
+                        Default::default(),
+                        [
+                            (platform_def!(1, 1), 1),
+                            (platform_def!(1, 2), 1),
+                            (platform_def!(1, 3), 1),
+                            (platform_def!(1, 4), 1),
+                            (platform_def!(1, 5), 1),
+                            (platform_def!(1, 6), 1),
+                            (platform_def!(3, 3), 1),
+                            (platform_def!(5, 5), 1),
+                        ]
+                        .into_iter()
+                        .collect(),
+                        None,
+                    );
+                    self.layout_stats.clear();
+                    self.start_solver(limits);
+                }
+
+                if let Some(weight) = self.layout_stats.weight.latest() {
+                    ui.horizontal_wrapped(|ui| {
+                        // From https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/misc_demo_window.rs#L211
+                        // Trick so we don't have to add spaces in the text below:
+                        let width =
+                            ui.fonts(|f| f.glyph_width(&TextStyle::Body.resolve(ui.style()), ' '));
+                        ui.spacing_mut().item_spacing.x = width;
+
+                        ui.label("Solution weight: ");
+                        ui.colored_label(Color32::GREEN, format!("{weight}"));
+                    });
+                }
+            });
         });
     }
 }
@@ -331,5 +371,20 @@ impl ResizeModal {
             ControlFlow::Continue(())
         })
         .inner
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PlatformLayoutStats {
+    weight: History<isize>,
+}
+
+impl PlatformLayoutStats {
+    pub fn new(length_range: Range<usize>, max_age: f32) -> Self {
+        Self { weight: History::new(length_range, max_age) }
+    }
+
+    pub fn clear(&mut self) {
+        self.weight.clear();
     }
 }

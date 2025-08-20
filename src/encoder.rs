@@ -95,7 +95,10 @@ use petgraph::{
 };
 use rustsat::{
     instances::{BasicVarManager, ManageVars, SatInstance},
-    types::{Lit, Var, constraints::CardConstraint},
+    types::{
+        Assignment, Lit, TernaryVal, Var,
+        constraints::{CardConstraint, PbConstraint},
+    },
 };
 
 use crate::{
@@ -422,6 +425,7 @@ impl EncodingDag {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Encoding {
     vars: EncodingVars,
     instance: SatInstance,
@@ -614,9 +618,7 @@ impl Encoding {
 
     pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
         let mut instance = self.instance.clone();
-        let mut weight_pb = limits
-            .weight_limit
-            .map(|limit| rustsat::types::constraints::PbConstraint::new_ub([], limit));
+        let mut weight_pb = limits.weight_limit.map(|limit| PbConstraint::new_ub([], limit));
 
         // Iterate all platforms that have limits and/or weights defined
         // For each platform def, either take the single platform type var for each
@@ -664,4 +666,27 @@ impl Encoding {
         // TODO: might need a Result?
         instance
     }
+}
+
+pub fn assignment_total_weight(
+    asgn: &Assignment,
+    vars: &EncodingVars,
+    weights: &HashMap<PlatformDef, isize>,
+) -> isize {
+    // For each platform def (and its weight)...
+    weights
+        .iter()
+        .flat_map(|(def, weight)| {
+            // ...iterate all tiles, and...
+            vars.iter_by_points().flat_map(|tile| {
+                // ...if the platform's var - for regular or flipped dims - is true...
+                [def.dims(), def.dims().flipped()]
+                    .iter()
+                    .filter_map(|dims| tile.for_dims(*dims))
+                    .any(|v| asgn.var_value(v) == TernaryVal::True)
+                    // ...add the weight of this platform to the sum.
+                    .then_some(*weight)
+            })
+        })
+        .sum()
 }
