@@ -187,7 +187,10 @@ where
             Some(SolverSessionResult::Sat { layout, mut limits }) => {
                 info!("Sat\n{layout:#?}");
                 if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
-                    limits.entry(platform_def!(1, 1)).insert_entry(platform_count_limit);
+                    limits
+                        .card_limits
+                        .entry(platform_def!(1, 1))
+                        .insert_entry(platform_count_limit);
                     self.start_solver(limits);
                 }
 

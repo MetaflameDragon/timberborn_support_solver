@@ -614,7 +614,7 @@ impl Encoding {
 
     pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
         let mut instance = self.instance.clone();
-        for (&platform_type, &limit) in limits.iter() {
+        for (&platform_type, &limit) in limits.card_limits.iter() {
             println!("Limiting {platform_type} platforms to n <= {limit}");
             let upper_constraint = if platform_type.rectangular() {
                 let mut limit_vars = vec![];

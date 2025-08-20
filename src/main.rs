@@ -97,7 +97,7 @@ fn try_into_platform_limits(
         }
     }
 
-    Ok(PlatformLimits::new(map))
+    Ok(PlatformLimits::new_unweighted(map))
 }
 
 /// Note: describes limits for _dimensions_, not the platform defs themselves.
@@ -343,7 +343,7 @@ async fn solver_loop(
             return Ok(());
         }
 
-        limits.entry(platform_def!(1, 1)).insert_entry(layout.platform_count() - 1);
+        limits.card_limits.entry(platform_def!(1, 1)).insert_entry(layout.platform_count() - 1);
 
         println!("Solution found ({} platforms total)", layout.platform_count());
         let platform_stats = layout.platform_stats();
