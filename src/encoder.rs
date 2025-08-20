@@ -614,10 +614,16 @@ impl Encoding {
 
     pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
         let mut instance = self.instance.clone();
-        let mut weight_pb =
-            rustsat::types::constraints::PbConstraint::new_ub([], limits.weight_limit);
-        for (&platform_type, &limit) in limits.card_limits.iter() {
-            println!("Limiting {platform_type} platforms to n <= {limit}");
+        let mut weight_pb = limits
+            .weight_limit
+            .map(|limit| rustsat::types::constraints::PbConstraint::new_ub([], limit));
+
+        // Iterate all platforms that have limits and/or weights defined
+        // For each platform def, either take the single platform type var for each
+        // tile, or, if there are multiple per tile, create a new var implied by
+        // all of them. Add those to the card constraint if there's a limit
+        // defined, ditto for weights.
+        for &platform_type in limits.card_limits.keys().chain(limits.weights.keys()).unique() {
             let lits: Vec<Lit> = if platform_type.rectangular() {
                 let mut limit_lits = vec![];
                 for tile_vars in self.vars.iter_by_points() {
@@ -639,13 +645,21 @@ impl Encoding {
                     .collect()
             };
 
-            let weight = limits.weights.get(&platform_type).copied().unwrap_or(0);
-            weight_pb.add(lits.iter().copied().zip(iter::repeat(weight)));
+            if let Some(&limit) = limits.card_limits.get(&platform_type) {
+                // println!("Limiting {platform_type} platforms to n <= {limit}");
+                instance.add_card_constr(CardConstraint::new_ub(lits.iter().copied(), limit));
+            }
 
-            instance.add_card_constr(CardConstraint::new_ub(lits, limit));
+            if let Some(weight_pb) = weight_pb.as_mut()
+                && let Some(weight) = limits.weights.get(&platform_type).copied()
+            {
+                weight_pb.add(lits.iter().copied().zip(iter::repeat(weight)));
+            }
         }
 
-        instance.add_pb_constr(weight_pb);
+        if let Some(weight_pb) = weight_pb {
+            instance.add_pb_constr(weight_pb);
+        }
 
         // TODO: might need a Result?
         instance

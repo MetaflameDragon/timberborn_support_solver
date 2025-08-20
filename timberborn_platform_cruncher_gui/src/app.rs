@@ -185,12 +185,19 @@ where
                 info!("Unsat");
             }
             Some(SolverSessionResult::Sat { layout, mut limits }) => {
-                info!("Sat\n{layout:#?}");
-                if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
-                    limits
-                        .card_limits
-                        .entry(platform_def!(1, 1))
-                        .insert_entry(platform_count_limit);
+                // info!("Sat\n{layout:#?}");
+                info!("Sat");
+                // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
+                //     limits
+                //         .card_limits
+                //         .entry(platform_def!(1, 1))
+                //         .insert_entry(platform_count_limit);
+                //     self.start_solver(limits);
+                // }
+                let weight = layout.platform_weight_sum(&limits.weights);
+                info!("Got a solution with weight {weight}");
+                if let Some(weight) = weight.checked_sub(1) {
+                    limits.weight_limit = Some(weight);
                     self.start_solver(limits);
                 }
 
@@ -245,7 +252,23 @@ where
                 Button::new(RichText::new("Solve").color(Color32::GREEN).size(24f32)).ui(ui);
 
             if solve_btn_resp.clicked() {
-                self.start_solver(Default::default());
+                let limits = PlatformLimits::new_with_weights(
+                    Default::default(),
+                    [
+                        (platform_def!(1, 1), 1),
+                        (platform_def!(1, 2), 1),
+                        (platform_def!(1, 3), 1),
+                        (platform_def!(1, 4), 1),
+                        (platform_def!(1, 5), 1),
+                        (platform_def!(1, 6), 1),
+                        (platform_def!(3, 3), 1),
+                        (platform_def!(5, 5), 1),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    None,
+                );
+                self.start_solver(limits);
             }
         });
     }
