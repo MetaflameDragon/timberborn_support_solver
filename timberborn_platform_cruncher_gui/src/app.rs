@@ -7,12 +7,14 @@ use egui::{
     Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
     Stroke, StrokeKind, Ui, UiBuilder, Vec2, Widget, pos2, vec2,
 };
+use itertools::Itertools;
 use log::{error, info};
+use platform_type_selector::PlatformTypeSelector;
 use rustsat::solvers::{Interrupt, Solve, SolveStats, SolverResult};
 use timberborn_platform_cruncher::{
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
-    platform::PLATFORMS_DEFAULT,
+    platform::{PLATFORMS_DEFAULT, PlatformDef},
     platform_def,
     world::WorldGrid,
 };
@@ -20,6 +22,7 @@ use timberborn_platform_cruncher::{
 use crate::{SolverBackend, app::frame_history::FrameHistory};
 
 mod frame_history;
+mod platform_type_selector;
 
 #[derive(Clone, Default, Debug)]
 struct TerrainTile {
@@ -35,6 +38,7 @@ where
     backend: SolverBackend<S>,
     displayed_layout: Option<PlatformLayout>,
     frame_history: FrameHistory,
+    platform_type_selector: PlatformTypeSelector,
 }
 
 impl<S> App<S>
@@ -51,6 +55,7 @@ where
             backend,
             displayed_layout: None,
             frame_history: FrameHistory::default(),
+            platform_type_selector: PlatformTypeSelector::with_defaults(PLATFORMS_DEFAULT.to_vec()),
         }
     }
 
@@ -150,7 +155,10 @@ where
         S: Solve + Default + Send + 'static,
     {
         let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
-        let encoding = Encoding::encode(&PLATFORMS_DEFAULT, &world_grid);
+        let encoding = Encoding::encode(
+            &self.platform_type_selector.active_platform_defs().collect_vec(),
+            &world_grid,
+        );
 
         if let Err(err) = self.backend.start(encoding, limits) {
             error!("Failed to start solver: {err}");
@@ -186,6 +194,10 @@ where
                 self.displayed_layout = Some(layout);
             }
         };
+
+        egui::SidePanel::left("left panel").show(ctx, |ui| {
+            self.platform_type_selector.ui(ui);
+        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.frame_history.ui(ui);
@@ -234,6 +246,12 @@ where
             }
         });
     }
+}
+
+fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
+    let (a, b) = input.trim().split_once('x')?;
+    let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+    (a > 0 && b > 0).then_some(PlatformDef::new(Dimensions::new(a, b)))
 }
 
 #[derive(Clone, Default, Debug)]
