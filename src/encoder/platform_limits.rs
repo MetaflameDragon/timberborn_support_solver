@@ -7,9 +7,9 @@ pub struct PlatformLimits {
     /// Cardinality limits
     pub card_limits: HashMap<PlatformDef, usize>,
     /// Platform type weights for optimization
-    pub weights: HashMap<PlatformDef, usize>,
+    pub weights: HashMap<PlatformDef, isize>,
     /// Limit for the sum of weights
-    pub weight_limit: usize,
+    pub weight_limit: isize,
 }
 
 impl PlatformLimits {
@@ -18,8 +18,8 @@ impl PlatformLimits {
     }
     pub fn new_with_weights(
         card_limits: HashMap<PlatformDef, usize>,
-        weights: HashMap<PlatformDef, usize>,
-        weight_limit: usize,
+        weights: HashMap<PlatformDef, isize>,
+        weight_limit: isize,
     ) -> Self {
         Self { card_limits, weights, weight_limit }
     }

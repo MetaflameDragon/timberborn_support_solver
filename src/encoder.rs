@@ -614,13 +614,15 @@ impl Encoding {
 
     pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
         let mut instance = self.instance.clone();
+        let mut weight_pb =
+            rustsat::types::constraints::PbConstraint::new_ub([], limits.weight_limit);
         for (&platform_type, &limit) in limits.card_limits.iter() {
             println!("Limiting {platform_type} platforms to n <= {limit}");
-            let upper_constraint = if platform_type.rectangular() {
-                let mut limit_vars = vec![];
+            let lits: Vec<Lit> = if platform_type.rectangular() {
+                let mut limit_lits = vec![];
                 for tile_vars in self.vars.iter_by_points() {
                     let limit_var = instance.new_var();
-                    limit_vars.push(limit_var);
+                    limit_lits.push(limit_var.pos_lit());
                     for var in [platform_type.dims(), platform_type.dims().flipped()]
                         .iter()
                         .filter_map(|d| tile_vars.for_dims(*d))
@@ -628,20 +630,22 @@ impl Encoding {
                         instance.add_lit_impl_lit(var.pos_lit(), limit_var.pos_lit());
                     }
                 }
-
-                CardConstraint::new_ub(limit_vars.iter().map(|var| var.pos_lit()), limit)
+                limit_lits
             } else {
-                CardConstraint::new_ub(
-                    self.vars
-                        .iter_dims_vars(platform_type.dims())
-                        .unwrap()
-                        .map(|var| var.pos_lit()),
-                    limit,
-                )
+                self.vars
+                    .iter_dims_vars(platform_type.dims())
+                    .unwrap()
+                    .map(|var| var.pos_lit())
+                    .collect()
             };
 
-            instance.add_card_constr(upper_constraint);
+            let weight = limits.weights.get(&platform_type).copied().unwrap_or(0);
+            weight_pb.add(lits.iter().copied().zip(iter::repeat(weight)));
+
+            instance.add_card_constr(CardConstraint::new_ub(lits, limit));
         }
+
+        instance.add_pb_constr(weight_pb);
 
         // TODO: might need a Result?
         instance
