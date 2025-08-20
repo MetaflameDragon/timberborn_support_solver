@@ -273,31 +273,41 @@ where
             }
 
             ui.horizontal(|ui| {
-                let solve_btn_resp =
-                    Button::new(RichText::new("Solve").color(Color32::GREEN).size(24f32)).ui(ui);
+                let is_running = self.active_session.is_some();
+                let button_text = if !is_running {
+                    RichText::new("Solve").color(Color32::GREEN)
+                } else {
+                    RichText::new("Abort").color(Color32::RED)
+                }
+                .size(24f32);
+                let solve_btn_resp = Button::new(button_text).ui(ui);
 
                 if solve_btn_resp.clicked() {
-                    let limits = PlatformLimits::new_with_weights(
-                        Default::default(),
-                        [
-                            (platform_def!(1, 1), 1),
-                            (platform_def!(1, 2), 1),
-                            (platform_def!(1, 3), 1),
-                            (platform_def!(1, 4), 1),
-                            (platform_def!(1, 5), 1),
-                            (platform_def!(1, 6), 1),
-                            (platform_def!(3, 3), 1),
-                            (platform_def!(5, 5), 1),
-                        ]
-                        .into_iter()
-                        .collect(),
-                        None,
-                    );
-                    self.layout_stats.clear();
-                    self.start_solver(limits);
+                    if !is_running {
+                        let limits = PlatformLimits::new_with_weights(
+                            Default::default(),
+                            [
+                                (platform_def!(1, 1), 5),
+                                (platform_def!(1, 2), 1),
+                                (platform_def!(1, 3), 1),
+                                (platform_def!(1, 4), 1),
+                                (platform_def!(1, 5), 1),
+                                (platform_def!(1, 6), 1),
+                                (platform_def!(3, 3), 2),
+                                (platform_def!(5, 5), 4),
+                            ]
+                            .into_iter()
+                            .collect(),
+                            None,
+                        );
+                        self.layout_stats.clear();
+                        self.start_solver(limits);
+                    } else {
+                        self.active_session.take().map(|mut session| session.interrupt());
+                    }
                 }
 
-                if self.active_session.is_some() {
+                if is_running {
                     ui.spinner();
                 }
 
