@@ -642,9 +642,8 @@ impl Encoding {
             } else {
                 self.vars
                     .iter_dims_vars(platform_type.dims())
-                    .unwrap()
-                    .map(|var| var.pos_lit())
-                    .collect()
+                    .map(|vars| vars.map(|var| var.pos_lit()).collect())
+                    .unwrap_or(vec![])
             };
 
             if let Some(&limit) = limits.card_limits.get(&platform_type) {
