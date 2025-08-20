@@ -297,6 +297,10 @@ where
                     self.start_solver(limits);
                 }
 
+                if self.active_session.is_some() {
+                    ui.spinner();
+                }
+
                 if let Some(weight) = self.layout_stats.weight.latest() {
                     ui.horizontal_wrapped(|ui| {
                         // From https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/misc_demo_window.rs#L211
