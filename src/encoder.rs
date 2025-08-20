@@ -673,7 +673,8 @@ pub fn assignment_total_weight(
     vars: &EncodingVars,
     weights: &HashMap<PlatformDef, isize>,
 ) -> isize {
-    // For each platform def (and its weight)...
+    // FIXME: This might fail/act weird if weights has two flipped platform variants
+    // (1x4 & 4x1) For each platform def (and its weight)...
     weights
         .iter()
         .flat_map(|(def, weight)| {
