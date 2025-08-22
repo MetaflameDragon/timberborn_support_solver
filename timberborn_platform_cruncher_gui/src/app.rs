@@ -18,7 +18,7 @@ use timberborn_platform_cruncher::{
     encoder,
     encoder::{Encoding, PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
-    platform::{PLATFORMS_DEFAULT, PlatformDef},
+    platform::PlatformDef,
     platform_def,
     world::WorldGrid,
 };
@@ -63,7 +63,16 @@ where
             displayed_layout: None,
             frame_history: FrameHistory::default(),
             layout_stats: PlatformLayoutStats::new(5..100, 5.0),
-            platform_type_selector: PlatformTypeSelector::with_defaults(PLATFORMS_DEFAULT.to_vec()),
+            platform_type_selector: PlatformTypeSelector::with_defaults([
+                (platform_def!(1, 1), 5),
+                (platform_def!(1, 2), 1),
+                (platform_def!(1, 3), 1),
+                (platform_def!(1, 4), 1),
+                (platform_def!(1, 5), 1),
+                (platform_def!(1, 6), 1),
+                (platform_def!(3, 3), 2),
+                (platform_def!(5, 5), 4),
+            ]),
         }
     }
 
@@ -164,7 +173,7 @@ where
     {
         let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
         let encoding = Encoding::encode(
-            &self.platform_type_selector.active_platform_defs().collect_vec(),
+            &self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect_vec(),
             &world_grid,
         );
 
@@ -286,18 +295,7 @@ where
                     if !is_running {
                         let limits = PlatformLimits::new_with_weights(
                             Default::default(),
-                            [
-                                (platform_def!(1, 1), 5),
-                                (platform_def!(1, 2), 1),
-                                (platform_def!(1, 3), 1),
-                                (platform_def!(1, 4), 1),
-                                (platform_def!(1, 5), 1),
-                                (platform_def!(1, 6), 1),
-                                (platform_def!(3, 3), 2),
-                                (platform_def!(5, 5), 4),
-                            ]
-                            .into_iter()
-                            .collect(),
+                            self.platform_type_selector.active_platform_defs().collect(),
                             None,
                         );
                         self.layout_stats.clear();

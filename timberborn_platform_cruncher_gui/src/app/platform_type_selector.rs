@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use eframe::epaint::Color32;
-use egui::{RichText, TextEdit, Ui};
+use egui::{DragValue, RichText, TextEdit, Ui, Widget};
 use log::info;
 use timberborn_platform_cruncher::{math::Dimensions, platform::PlatformDef};
 
@@ -39,6 +39,7 @@ struct PlatformDefOrdered(pub PlatformDef);
 #[derive(Clone, Debug)]
 struct PlatformDefItemData {
     active: bool,
+    weight: isize,
 }
 
 impl PartialEq for PlatformDefOrdered {
@@ -67,18 +68,18 @@ impl PartialOrd for PlatformDefOrdered {
 }
 
 impl PlatformDefItemData {
-    pub fn new_active() -> Self {
-        Self { active: true }
+    pub fn new_active(weight: isize) -> Self {
+        Self { active: true, weight }
     }
 }
 
 impl PlatformTypeSelector {
     pub fn with_defaults(
-        platform_defs: impl IntoIterator<Item = PlatformDef>,
+        platform_defs: impl IntoIterator<Item = (PlatformDef, isize)>,
     ) -> PlatformTypeSelector {
         let platform_defs_btree = platform_defs
             .into_iter()
-            .map(|def| (PlatformDefOrdered(def), PlatformDefItemData::new_active()))
+            .map(|(def, weight)| (PlatformDefOrdered(def), PlatformDefItemData::new_active(weight)))
             .collect();
         dbg!(&platform_defs_btree);
         Self {
@@ -98,23 +99,27 @@ impl PlatformTypeSelector {
                 // Disable removal/deactivation for 1x1 platforms,
                 // as a lot of logic assumes that they're always available
                 let disable_controls = dims != Dimensions::new(1, 1);
-                ui.add_enabled_ui(disable_controls, |ui| {
-                    ui.horizontal(|ui| {
-                        let should_keep = !ui.button("X").clicked();
-                        ui.checkbox(&mut data.active, egui::Atom::default());
-                        let label_text =
-                            RichText::new(format!("{}x{}", dims.width(), dims.height())).color(
-                                // Highlight if a duplicate entry warning is being shown
-                                self.text_box_feedback
-                                    .as_ref()
-                                    .and_then(|f| f.is_duplicate(def.0).then_some(f.as_color()))
-                                    .unwrap_or(Color32::PLACEHOLDER),
-                            );
-                        ui.label(label_text);
+                ui.horizontal(|ui| {
+                    let should_keep = ui
+                        .add_enabled_ui(disable_controls, |ui| {
+                            let should_keep = !ui.button("X").clicked();
+                            ui.checkbox(&mut data.active, egui::Atom::default());
+                            should_keep
+                        })
+                        .inner;
+                    let label_text = RichText::new(format!("{}x{}", dims.width(), dims.height()))
+                        .color(
+                            // Highlight if a duplicate entry warning is being shown
+                            self.text_box_feedback
+                                .as_ref()
+                                .and_then(|f| f.is_duplicate(def.0).then_some(f.as_color()))
+                                .unwrap_or(Color32::PLACEHOLDER),
+                        );
+                    ui.label(label_text);
 
-                        should_keep
-                    })
-                    .inner
+                    DragValue::new(&mut data.weight).speed(1).range(0..=20).ui(ui);
+
+                    should_keep
                 })
                 .inner
             });
@@ -143,7 +148,7 @@ impl PlatformTypeSelector {
                     if let Some(def) = app::try_parse_platform_def(&self.new_platform_str) {
                         if self
                             .platform_defs
-                            .insert(PlatformDefOrdered(def), PlatformDefItemData::new_active())
+                            .insert(PlatformDefOrdered(def), PlatformDefItemData::new_active(1))
                             .is_none()
                         {
                             dbg!(&self.platform_defs);
@@ -162,9 +167,9 @@ impl PlatformTypeSelector {
         });
     }
 
-    pub fn active_platform_defs(&self) -> impl Iterator<Item = PlatformDef> {
-        self.platform_defs
-            .iter()
-            .filter_map(|(def, &PlatformDefItemData { active, .. })| active.then_some(def.0))
+    pub fn active_platform_defs(&self) -> impl Iterator<Item = (PlatformDef, isize)> {
+        self.platform_defs.iter().filter_map(|(def, &PlatformDefItemData { active, weight })| {
+            active.then_some((def.0, weight))
+        })
     }
 }
