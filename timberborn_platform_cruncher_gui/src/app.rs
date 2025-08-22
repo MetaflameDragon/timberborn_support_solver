@@ -23,7 +23,10 @@ use timberborn_platform_cruncher::{
     world::{World, WorldGrid},
 };
 
-use crate::{SolverBackend, SolverResponse, SolverSession, app::frame_history::FrameHistory};
+use crate::{
+    app::frame_history::FrameHistory,
+    solver_backend::{SolverBackend, SolverResponse, SolverSession},
+};
 
 mod frame_history;
 mod platform_type_selector;
