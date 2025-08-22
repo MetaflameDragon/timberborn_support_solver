@@ -170,6 +170,17 @@ impl PlatformLayout {
             );
         }
     }
+
+    pub fn total_weight(&self, weights: &HashMap<PlatformDef, isize>) -> isize {
+        self.platforms
+            .values()
+            .flat_map(|plat| {
+                weights.iter().filter_map(|(&def, &weight)| {
+                    (def.dims() <= plat.def().dims()).then_some(weight)
+                })
+            })
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

@@ -216,8 +216,8 @@ where
             }
             Some(SolverSessionResult::Sat {
                 layout,
-                response: SolverResponse { mut limits, encoding, .. },
-                assignment,
+                response: SolverResponse { mut limits, .. },
+                ..
             }) => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
@@ -229,9 +229,7 @@ where
                 //     self.start_solver(limits);
                 // }
 
-                // TODO get weight from layout instead
-                let weight =
-                    encoder::assignment_total_weight(&assignment, encoding.vars(), &limits.weights);
+                let weight = layout.total_weight(&limits.weights);
 
                 info!("Got a solution with weight {weight}");
                 self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
