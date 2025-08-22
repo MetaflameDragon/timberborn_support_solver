@@ -95,7 +95,10 @@ use petgraph::{
 };
 use rustsat::{
     instances::{BasicVarManager, ManageVars, SatInstance},
-    types::{Lit, Var, constraints::CardConstraint},
+    types::{
+        Assignment, Lit, TernaryVal, Var,
+        constraints::{CardConstraint, PbConstraint},
+    },
 };
 
 use crate::{
@@ -422,6 +425,7 @@ impl EncodingDag {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Encoding {
     vars: EncodingVars,
     instance: SatInstance,
@@ -614,13 +618,19 @@ impl Encoding {
 
     pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
         let mut instance = self.instance.clone();
-        for (&platform_type, &limit) in limits.iter() {
-            println!("Limiting {platform_type} platforms to n <= {limit}");
-            let upper_constraint = if platform_type.rectangular() {
-                let mut limit_vars = vec![];
+        let mut weight_pb = limits.weight_limit.map(|limit| PbConstraint::new_ub([], limit));
+
+        // Iterate all platforms that have limits and/or weights defined
+        // For each platform def, either take the single platform type var for each
+        // tile, or, if there are multiple per tile, create a new var implied by
+        // all of them. Add those to the card constraint if there's a limit
+        // defined, ditto for weights.
+        for &platform_type in limits.card_limits.keys().chain(limits.weights.keys()).unique() {
+            let lits: Vec<Lit> = if platform_type.rectangular() {
+                let mut limit_lits = vec![];
                 for tile_vars in self.vars.iter_by_points() {
                     let limit_var = instance.new_var();
-                    limit_vars.push(limit_var);
+                    limit_lits.push(limit_var.pos_lit());
                     for var in [platform_type.dims(), platform_type.dims().flipped()]
                         .iter()
                         .filter_map(|d| tile_vars.for_dims(*d))
@@ -628,22 +638,55 @@ impl Encoding {
                         instance.add_lit_impl_lit(var.pos_lit(), limit_var.pos_lit());
                     }
                 }
-
-                CardConstraint::new_ub(limit_vars.iter().map(|var| var.pos_lit()), limit)
+                limit_lits
             } else {
-                CardConstraint::new_ub(
-                    self.vars
-                        .iter_dims_vars(platform_type.dims())
-                        .unwrap()
-                        .map(|var| var.pos_lit()),
-                    limit,
-                )
+                self.vars
+                    .iter_dims_vars(platform_type.dims())
+                    .map(|vars| vars.map(|var| var.pos_lit()).collect())
+                    .unwrap_or(vec![])
             };
 
-            instance.add_card_constr(upper_constraint);
+            if let Some(&limit) = limits.card_limits.get(&platform_type) {
+                // println!("Limiting {platform_type} platforms to n <= {limit}");
+                instance.add_card_constr(CardConstraint::new_ub(lits.iter().copied(), limit));
+            }
+
+            if let Some(weight_pb) = weight_pb.as_mut()
+                && let Some(weight) = limits.weights.get(&platform_type).copied()
+            {
+                weight_pb.add(lits.iter().copied().zip(iter::repeat(weight)));
+            }
+        }
+
+        if let Some(weight_pb) = weight_pb {
+            instance.add_pb_constr(weight_pb);
         }
 
         // TODO: might need a Result?
         instance
     }
+}
+
+pub fn assignment_total_weight(
+    asgn: &Assignment,
+    vars: &EncodingVars,
+    weights: &HashMap<PlatformDef, isize>,
+) -> isize {
+    // FIXME: This might fail/act weird if weights has two flipped platform variants
+    // (1x4 & 4x1) For each platform def (and its weight)...
+    weights
+        .iter()
+        .flat_map(|(def, weight)| {
+            // ...iterate all tiles, and...
+            vars.iter_by_points().flat_map(|tile| {
+                // ...if the platform's var - for regular or flipped dims - is true...
+                [def.dims(), def.dims().flipped()]
+                    .iter()
+                    .filter_map(|dims| tile.for_dims(*dims))
+                    .any(|v| asgn.var_value(v) == TernaryVal::True)
+                    // ...add the weight of this platform to the sum.
+                    .then_some(*weight)
+            })
+        })
+        .sum()
 }
