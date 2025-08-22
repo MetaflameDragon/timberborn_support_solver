@@ -1,5 +1,5 @@
 [workspace]
-members = ["timberborn_platform_cruncher_gui"]
+members = ["crates/repl", "timberborn_platform_cruncher_gui"]
 
 [package]
 name = "timberborn_platform_cruncher"
@@ -7,37 +7,15 @@ version = "0.1.0"
 edition = "2024"
 resolver = "3"
 
-[[bin]]
-name = "timberborn_platform_cruncher"
-
 [lib]
 
-
-
 [dependencies]
-rustsat-glucose = { version = "0.7.2", features = [] }
 rustsat = { version = "0.7.2", features = [] }
 assertables = "9.5.5"
-anyhow = "1.0.98"
-thiserror = { version = "2.0.12" }
-clap = { version = "4.5.39", features = ["cargo", "derive"] }
-shlex = "1.3.0"
-ctrlc = "3.4.7"
 log = "0.4.27"
-env_logger = "0.11.8"
-chrono = "0.4.41"
 test-case = "3.3.1"
-futures = "0.3.31"
-async-stream = "0.3.6"
-tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
 serde = { version = "1.0.219", features = ["derive"] }
-toml = "0.9.4"
 derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from", "is_variant"] }
 new_zealand = "0.1.6"
-tokio-util = "0.7.16"
-enum-iterator = "2.1.0"
-enum-map = "2.7.3"
 petgraph = "0.8.2"
 itertools = "0.14.0"
-static_assertions = "1.1.0"
-owo-colors = "4.2.2"
