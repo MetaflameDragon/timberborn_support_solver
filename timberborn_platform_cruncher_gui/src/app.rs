@@ -47,6 +47,17 @@ where
     platform_type_selector: PlatformTypeSelector,
 }
 
+const DEFAULT_PLATFORMS: [(PlatformDef, isize); 8] = [
+    (platform_def!(1, 1), 5),
+    (platform_def!(1, 2), 1),
+    (platform_def!(1, 3), 1),
+    (platform_def!(1, 4), 1),
+    (platform_def!(1, 5), 1),
+    (platform_def!(1, 6), 1),
+    (platform_def!(3, 3), 2),
+    (platform_def!(5, 5), 4),
+];
+
 impl<S> App<S>
 where
     S: Interrupt,
@@ -63,16 +74,7 @@ where
             displayed_layout: None,
             frame_history: FrameHistory::default(),
             layout_stats: PlatformLayoutStats::new(5..100, 5.0),
-            platform_type_selector: PlatformTypeSelector::with_defaults([
-                (platform_def!(1, 1), 5),
-                (platform_def!(1, 2), 1),
-                (platform_def!(1, 3), 1),
-                (platform_def!(1, 4), 1),
-                (platform_def!(1, 5), 1),
-                (platform_def!(1, 6), 1),
-                (platform_def!(3, 3), 2),
-                (platform_def!(5, 5), 4),
-            ]),
+            platform_type_selector: PlatformTypeSelector::with_defaults(DEFAULT_PLATFORMS),
         }
     }
 
