@@ -147,6 +147,40 @@ impl PlatformLayout {
 
         ValidationResult { overlapping_platforms, unsupported_terrain, out_of_bounds_platforms }
     }
+
+    pub fn run_trivial_optimization(&mut self, world: &World) {
+        #[cfg(debug_assertions)]
+        let was_valid = self.validate(world).is_valid();
+
+        // Keep all platforms that support at least one terrain tile
+        self.platforms.retain(|point, platform| {
+            platform
+                .dims()
+                .iter_within()
+                .any(|offset| world.grid().get(*point + offset) == Some(&true))
+        });
+
+        #[cfg(debug_assertions)]
+        if was_valid {
+            let validation = self.validate(world);
+            debug_assert!(
+                validation.is_valid(),
+                "Validation failed after run_trivial_optimization():\n{:#?}",
+                validation
+            );
+        }
+    }
+
+    pub fn total_weight(&self, weights: &HashMap<PlatformDef, isize>) -> isize {
+        self.platforms
+            .values()
+            .flat_map(|plat| {
+                weights.iter().filter_map(|(&def, &weight)| {
+                    (def.dims() <= plat.def().dims()).then_some(weight)
+                })
+            })
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

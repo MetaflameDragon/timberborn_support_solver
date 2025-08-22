@@ -20,7 +20,7 @@ use timberborn_platform_cruncher::{
     math::{Dimensions, Grid, Point},
     platform::PlatformDef,
     platform_def,
-    world::WorldGrid,
+    world::{World, WorldGrid},
 };
 
 use crate::{SolverBackend, SolverResponse, SolverSession, app::frame_history::FrameHistory};
@@ -150,7 +150,8 @@ where
         match resp.result {
             Ok(SolverResult::Sat) => match resp.solver.full_solution() {
                 Ok(asgn) => {
-                    let layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
+                    let mut layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
+                    layout.run_trivial_optimization(&self.make_world());
                     Some(SolverSessionResult::Sat { layout, response: resp, assignment: asgn })
                 }
                 Err(err) => {
@@ -173,10 +174,10 @@ where
     where
         S: Solve + Default + Send + 'static,
     {
-        let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
+        let world = self.make_world();
         let encoding = Encoding::encode(
             &self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect_vec(),
-            &world_grid,
+            world.grid(),
         );
 
         self.active_session.take().map(|mut session| session.interrupt());
@@ -187,6 +188,11 @@ where
                 error!("Failed to start solver: {err}");
             })
             .ok();
+    }
+
+    fn make_world(&self) -> World {
+        let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
+        World::new(world_grid)
     }
 }
 
@@ -210,8 +216,8 @@ where
             }
             Some(SolverSessionResult::Sat {
                 layout,
-                response: SolverResponse { mut limits, encoding, .. },
-                assignment,
+                response: SolverResponse { mut limits, .. },
+                ..
             }) => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
@@ -223,8 +229,7 @@ where
                 //     self.start_solver(limits);
                 // }
 
-                let weight =
-                    encoder::assignment_total_weight(&assignment, encoding.vars(), &limits.weights);
+                let weight = layout.total_weight(&limits.weights);
 
                 info!("Got a solution with weight {weight}");
                 self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
