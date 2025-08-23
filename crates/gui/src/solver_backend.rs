@@ -89,7 +89,7 @@ impl SolverBackend {
         limits: PlatformLimits,
     ) -> anyhow::Result<SolverSession<S>>
     where
-        S: Solve + Interrupt + Default + Send + 'static,
+        S: Solve + SolverTraitBounds + Default + Send + 'static,
     {
         let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
@@ -121,7 +121,7 @@ impl SolverBackend {
         limits: PlatformLimits,
     ) -> anyhow::Result<SolverSession<S>>
     where
-        S: Solve + Default + Send + 'static,
+        S: Solve + SolverTraitBounds + Default + Send + 'static,
     {
         let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
@@ -131,17 +131,16 @@ impl SolverBackend {
 
         let session = SolverSession::<S> { encoding, limits, rx };
 
-        // TODO
-        // wasm_bindgen_futures::spawn_local({
-        //     let ctx = self.egui_ctx.clone();
-        //     async move || {
-        //         // If sending fails, the backend has dropped the receiver
-        //         _ = tx.send((solver.solve(), solver));
-        //         if let Some(ctx) = ctx {
-        //             ctx.request_repaint();
-        //         }
-        //     }
-        // });
+        wasm_bindgen_futures::spawn_local({
+            let ctx = self.egui_ctx.clone();
+            async move || {
+                // If sending fails, the backend has dropped the receiver
+                _ = tx.send((solver.solve(), solver));
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            }
+        }());
 
         Ok(session)
     }

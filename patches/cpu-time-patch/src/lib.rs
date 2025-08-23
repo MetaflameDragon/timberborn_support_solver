@@ -8,26 +8,20 @@ pub use wasm::*;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::{
-        io::Result,
-        marker::PhantomData,
-        rc::Rc,
-        time::{Duration, Instant},
-    };
+    use std::{io::Result, marker::PhantomData, rc::Rc, time::Duration};
 
     #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
-    pub struct ProcessTime(Instant);
+    pub struct ProcessTime;
 
     #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
     pub struct ThreadTime(
-        Instant,
         // makes type non-sync and non-send
         PhantomData<Rc<()>>,
     );
 
     impl ProcessTime {
         pub fn try_now() -> Result<Self> {
-            Ok(Self(Instant::now()))
+            Ok(Self)
         }
 
         pub fn now() -> Self {
@@ -43,17 +37,13 @@ mod wasm {
         }
 
         pub fn duration_since(&self, timestamp: Self) -> Duration {
-            self.0.duration_since(timestamp.0)
-        }
-
-        pub fn as_instant(&self) -> Instant {
-            self.0
+            Duration::ZERO
         }
     }
 
     impl ThreadTime {
         pub fn try_now() -> Result<Self> {
-            Ok(Self(Instant::now(), PhantomData::default()))
+            Ok(Self(PhantomData::default()))
         }
 
         pub fn now() -> Self {
@@ -69,11 +59,7 @@ mod wasm {
         }
 
         pub fn duration_since(&self, timestamp: ThreadTime) -> Duration {
-            self.0.duration_since(timestamp.0)
-        }
-
-        pub fn as_instant(&self) -> Instant {
-            self.0
+            Duration::ZERO
         }
     }
 }
