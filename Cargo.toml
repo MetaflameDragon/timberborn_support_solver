@@ -1,8 +1,8 @@
 [workspace]
-members = ["crates/repl", "timberborn_platform_cruncher_gui"]
+members = ["crates/repl", "crates/gui"]
 
 [package]
-name = "timberborn_platform_cruncher"
+name = "timberborn-platform-cruncher"
 version = "0.1.0"
 edition = "2024"
 resolver = "3"

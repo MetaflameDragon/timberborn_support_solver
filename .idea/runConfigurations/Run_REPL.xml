@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Run GUI" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+  <configuration default="false" name="Run REPL" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="release" />
-    <option name="command" value="run --package timberborn-platform-cruncher-gui --bin timberborn-platform-cruncher-gui" />
+    <option name="command" value="run --package timberborn-platform-cruncher-repl --target x86_64-pc-windows-msvc" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
     <option name="emulateTerminal" value="true" />
