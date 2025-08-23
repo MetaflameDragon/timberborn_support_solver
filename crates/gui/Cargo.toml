@@ -3,6 +3,9 @@ name = "timberborn-platform-cruncher-gui"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [[bin]]
 name = "timberborn-platform-cruncher-gui-native"
 path = "src/main.rs"

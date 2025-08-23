@@ -20,3 +20,6 @@ derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from", "is
 new_zealand = "0.1.6"
 petgraph = "0.8.2"
 itertools = "0.14.0"
+
+[patch.crates-io]
+cpu-time = { path = "patches/cpu-time-patch" }

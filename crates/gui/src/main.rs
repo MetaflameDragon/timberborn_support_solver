@@ -6,6 +6,7 @@ use crate::solver_backend::SolverBackend;
 mod app;
 mod solver_backend;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> anyhow::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
@@ -28,4 +29,9 @@ fn main() -> anyhow::Result<()> {
     .expect("Error while running frontend");
 
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    panic!("This shouldn't be compiled for WASM!");
 }
