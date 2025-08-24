@@ -2,10 +2,10 @@ use std::ops::{ControlFlow, Range};
 
 #[allow(unused_imports)] // Keeping this Anyhow import as Context would clash with egui
 use anyhow::Context as _;
-use eframe::Frame;
+use eframe::{Frame, emath::Align};
 use egui::{
-    Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, Widget, pos2, util::History, vec2,
+    Button, Color32, Context, DragValue, Layout, Modal, PointerButton, Rect, Response, RichText,
+    Sense, Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, Widget, pos2, util::History, vec2,
 };
 use itertools::Itertools;
 use log::{error, info};
@@ -85,23 +85,29 @@ where
         ui.scope_builder(UiBuilder::new().sense(Sense::drag()), |ui| {
             egui::Frame::canvas(ui.style()).show(ui, |ui| {
                 let corner_point = ui.next_widget_position();
+                let available_size = ui.available_size();
+
+                let terrain_dims = self.terrain_grid.dims();
+                let terrain_dims_vec = vec2(terrain_dims.width as f32, terrain_dims.height as f32);
 
                 // Spacing between items
                 let spacing = 2f32;
                 let min_tile_size = 3f32;
 
-                let total_width = ui.available_width();
-                let tile_size = ((total_width + spacing) / (self.terrain_grid.dims().width as f32)
-                    - spacing)
-                    .max(min_tile_size);
+                let max_tile_size = (available_size + vec2(spacing, spacing)) / terrain_dims_vec
+                    - vec2(spacing, spacing);
+                let tile_size = max_tile_size.min_elem().max(min_tile_size);
+
                 let get_offset = |p: Point, rel_tile_offset: Vec2| -> Vec2 {
                     ((pos2(p.x as f32, p.y as f32)) * (tile_size + spacing)
                         + rel_tile_offset * tile_size)
                         .to_vec2()
                 };
 
-                let grid_vec =
-                    get_offset(self.terrain_grid.dims().corner_point_incl().unwrap(), Vec2::ONE);
+                let grid_vec = get_offset(terrain_dims.corner_point_incl().unwrap(), Vec2::ONE);
+                ui.set_min_size(
+                    terrain_dims_vec * min_tile_size + (terrain_dims_vec - Vec2::ONE) * spacing,
+                );
                 ui.set_width(grid_vec.x);
                 ui.set_height(grid_vec.y);
 
@@ -252,45 +258,7 @@ where
             self.platform_type_selector.ui(ui);
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.frame_history.ui(ui);
-
-            if ui.button("Resize grid").clicked() {
-                self.resize_modal.open(self.terrain_grid.dims());
-            }
-            if let ControlFlow::Break(Some(new_dims)) = self.resize_modal.ui(ui)
-                && !new_dims.empty()
-            {
-                self.terrain_grid = Grid::new(new_dims); // TODO copy old
-            }
-            debug_assert!(!self.terrain_grid.dims().empty());
-
-            let resp = self.draw_terrain_grid_ui(ui);
-
-            if resp.dragged()
-                && let Some(pos) = resp.interact_pointer_pos()
-            {
-                let rect = resp.rect;
-                let grid_dims = self.terrain_grid.dims();
-
-                let pos_frac = (pos - rect.left_top()) / rect.size();
-                let tile_index = (
-                    (pos_frac.x * grid_dims.width as f32).floor() as isize,
-                    (pos_frac.y * grid_dims.height as f32).floor() as isize,
-                );
-
-                if let Some(tile) =
-                    self.terrain_grid.get_mut(Point::new(tile_index.0, tile_index.1))
-                {
-                    if resp.dragged_by(PointerButton::Primary) {
-                        tile.terrain = true;
-                    } else if resp.dragged_by(PointerButton::Secondary) {
-                        tile.terrain = false;
-                    }
-                }
-                info!("{tile_index:?}");
-            }
-
+        egui::TopBottomPanel::bottom("bottom panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let is_running = self.active_session.is_some();
                 let button_text = if !is_running {
@@ -332,6 +300,46 @@ where
                     });
                 }
             });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.frame_history.ui(ui);
+
+            if ui.button("Resize grid").clicked() {
+                self.resize_modal.open(self.terrain_grid.dims());
+            }
+            if let ControlFlow::Break(Some(new_dims)) = self.resize_modal.ui(ui)
+                && !new_dims.empty()
+            {
+                self.terrain_grid = Grid::new(new_dims); // TODO copy old
+            }
+            debug_assert!(!self.terrain_grid.dims().empty());
+
+            let resp = self.draw_terrain_grid_ui(ui);
+
+            if resp.dragged()
+                && let Some(pos) = resp.interact_pointer_pos()
+            {
+                let rect = resp.rect;
+                let grid_dims = self.terrain_grid.dims();
+
+                let pos_frac = (pos - rect.left_top()) / rect.size();
+                let tile_index = (
+                    (pos_frac.x * grid_dims.width as f32).floor() as isize,
+                    (pos_frac.y * grid_dims.height as f32).floor() as isize,
+                );
+
+                if let Some(tile) =
+                    self.terrain_grid.get_mut(Point::new(tile_index.0, tile_index.1))
+                {
+                    if resp.dragged_by(PointerButton::Primary) {
+                        tile.terrain = true;
+                    } else if resp.dragged_by(PointerButton::Secondary) {
+                        tile.terrain = false;
+                    }
+                }
+                info!("{tile_index:?}");
+            }
         });
     }
 
