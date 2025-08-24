@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+#[cfg(target_arch = "wasm32")]
 use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 use derive_more::{Deref, DerefMut};
 use futures_channel::oneshot;
@@ -11,7 +12,6 @@ use rustsat::{
     },
     types::{Assignment, Cl, Clause, Lit, TernaryVal, Var},
 };
-#[cfg(target_arch = "wasm32")]
 use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
 
 pub struct SolverBackend {
