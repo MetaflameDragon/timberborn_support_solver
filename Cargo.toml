@@ -6,6 +6,7 @@ name = "timberborn-platform-cruncher"
 version = "0.1.0"
 edition = "2024"
 resolver = "3"
+rust-version = "1.89.0"
 
 [lib]
 
