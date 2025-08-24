@@ -1,7 +1,6 @@
 //! A temporary no-op patch crate for cpu-time to work with WASM
 
-#![warn(missing_debug_implementations)]
-#![warn(missing_docs)]
+#![allow(unused_variables, dead_code)]
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::*;

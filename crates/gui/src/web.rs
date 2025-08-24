@@ -4,7 +4,10 @@ use batsat::callbacks::AsyncInterrupt;
 use eframe::wasm_bindgen::{self, prelude::*};
 use rustsat_batsat;
 
-use crate::{App, solver_backend::SolverBackend};
+use crate::{
+    App,
+    solver_backend::{BatsatWrapper, SolverBackend},
+};
 
 /// Our handle to the web app from JavaScript.
 #[derive(Clone)]
@@ -41,7 +44,7 @@ impl WebHandle {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(App::<Solver>::new(cc, backend)))),
+                Box::new(|cc| Ok(Box::new(App::<BatsatWrapper>::new(cc, backend)))),
             )
             .await
     }
@@ -54,7 +57,7 @@ impl WebHandle {
     /// Example on how to call into your app from JavaScript.
     #[wasm_bindgen]
     pub fn example(&self) {
-        if let Some(_app) = self.runner.app_mut::<App<Solver>>() {
+        if let Some(_app) = self.runner.app_mut::<App<BatsatWrapper>>() {
             // _app.example();
         }
     }

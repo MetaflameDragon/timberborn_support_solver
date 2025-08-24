@@ -25,7 +25,7 @@ use timberborn_platform_cruncher::{
 
 use crate::{
     app::frame_history::FrameHistory,
-    solver_backend::{SolverBackend, SolverResponse, SolverSession, SolverTraitBounds},
+    solver_backend::{SolverBackend, SolverResponse, SolverSession},
 };
 
 mod frame_history;
@@ -38,7 +38,7 @@ struct TerrainTile {
 
 pub struct App<S>
 where
-    S: SolverTraitBounds,
+    S: Interrupt,
 {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
@@ -63,7 +63,7 @@ const DEFAULT_PLATFORMS: [(PlatformDef, isize); 8] = [
 
 impl<S> App<S>
 where
-    S: SolverTraitBounds,
+    S: Interrupt,
 {
     pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
@@ -183,7 +183,6 @@ where
             world.grid(),
         );
 
-        #[cfg(not(target_arch = "wasm32"))]
         self.active_session.take().map(|mut session| session.interrupt());
         self.active_session = self
             .backend
@@ -208,7 +207,7 @@ enum SolverSessionResult<S> {
 
 impl<S> eframe::App for App<S>
 where
-    S: SolverTraitBounds + Solve + SolveStats + Default + Send + 'static,
+    S: Solve + Interrupt + SolveStats + Default + Send + 'static,
 {
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
         self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
@@ -312,7 +311,6 @@ where
                         self.layout_stats.clear();
                         self.start_solver(limits);
                     } else {
-                        #[cfg(not(target_arch = "wasm32"))]
                         self.active_session.take().map(|mut session| session.interrupt());
                     }
                 }
@@ -338,7 +336,6 @@ where
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        #[cfg(not(target_arch = "wasm32"))]
         self.active_session.take().map(|mut session| session.interrupt());
     }
 }
