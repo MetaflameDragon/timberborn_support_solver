@@ -17,7 +17,7 @@ FEATURES="web_app"
 OPEN=false
 OPTIMIZE=false
 BUILD=debug
-BUILD_FLAGS=""
+BUILD_FLAGS="--config patch.crates-io.cpu-time.path=\"../../patches/cpu-time-patch\""
 WGPU=false
 WASM_OPT_FLAGS="-O2 --fast-math"
 
@@ -54,7 +54,7 @@ while test $# -gt 0; do
       shift
       OPTIMIZE=true
       BUILD="release"
-      BUILD_FLAGS="--release"
+      BUILD_FLAGS="${BUILD_FLAGS} --release"
       ;;
 
     --wgpu)
