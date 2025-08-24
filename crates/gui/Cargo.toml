@@ -3,19 +3,44 @@ name = "timberborn-platform-cruncher-gui"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "timberborn-platform-cruncher-gui-native"
+path = "src/main.rs"
+
+[features]
+web_app = []
+glow = ["eframe/glow"]
+wgpu = ["eframe/wgpu", "bytemuck", "dep:wgpu"]
+
 [dependencies]
 timberborn-platform-cruncher = { path = "../../." }
 egui = "0.32.1"
 log = "0.4.27"
-env_logger = "0.11.8"
-rustsat-glucose = { version = "0.7.2", features = [] }
 rustsat = { version = "0.7.2", features = [] }
 anyhow = "1.0.98"
 futures = "0.3.31"
-tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
+futures-channel = "0.3.31"
 serde = { version = "1.0.219", features = ["derive"] }
 toml = "0.9.4"
-tokio-util = "0.7.16"
 itertools = "0.14.0"
 derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from", "is_variant"] }
 eframe = "0.32.1"
+
+bytemuck = { version = "1.7.2", optional = true }
+# Enable both WebGL & WebGPU when targeting the web (these features have no effect when not targeting wasm32)
+wgpu = { version = "25.0.0", features = ["webgpu", "webgl"], optional = true }
+
+# native:
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11.8"
+rustsat-glucose = { version = "0.7.2", features = [] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
+tokio-util = "0.7.16"
+
+# web:
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustsat-batsat = { version = "0.7.2", features = [] }
+batsat = "0.6.0"
+wasm-bindgen = "=0.2.97"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3.73"
