@@ -6,7 +6,7 @@ use rustsat_batsat;
 
 use crate::{
     App,
-    solver_backend::{BatsatWrapper, SolverBackend},
+    solver_backend::{SolverBackend, batsat_wrapper::BatsatWrapper},
 };
 
 /// Our handle to the web app from JavaScript.

@@ -1,8 +1,5 @@
 use std::time::Duration;
 
-#[cfg(target_arch = "wasm32")]
-use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
-use derive_more::{Deref, DerefMut};
 use futures_channel::oneshot;
 use log::warn;
 use rustsat::{
@@ -139,124 +136,139 @@ impl SolverBackend {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct BatsatWrapper(rustsat_batsat::Solver<AsyncInterrupt>);
+#[cfg(target_arch = "wasm32")]
+pub mod batsat_wrapper {
+    use std::time::Duration;
 
-impl BatsatWrapper {
-    pub fn batsat_ref(&self) -> &rustsat_batsat::Solver<AsyncInterrupt> {
-        &self.0
-    }
-    pub fn batsat_mut(&mut self) -> &mut rustsat_batsat::Solver<AsyncInterrupt> {
-        &mut self.0
-    }
-}
+    use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 
-pub struct InterruptHandleWrapper(AsyncInterruptHandle);
+    #[derive(Debug, Default)]
+    pub struct BatsatWrapper(rustsat_batsat::Solver<AsyncInterrupt>);
 
-impl InterruptSolver for InterruptHandleWrapper {
-    fn interrupt(&self) {
-        self.0.interrupt_async()
-    }
-}
-
-impl Interrupt for BatsatWrapper {
-    type Interrupter = InterruptHandleWrapper;
-
-    fn interrupter(&mut self) -> Self::Interrupter {
-        InterruptHandleWrapper(self.0.batsat_ref().cb().get_handle())
-    }
-}
-
-// Trait forwards for Batsat
-
-impl Extend<Clause> for BatsatWrapper {
-    fn extend<T: IntoIterator<Item = Clause>>(&mut self, iter: T) {
-        self.0.extend(iter);
-    }
-}
-
-impl<'a, C> Extend<&'a C> for BatsatWrapper
-where
-    C: AsRef<Cl> + ?Sized,
-{
-    fn extend<T: IntoIterator<Item = &'a C>>(&mut self, iter: T) {
-        self.0.extend(iter);
-    }
-}
-
-impl Solve for BatsatWrapper {
-    fn signature(&self) -> &'static str {
-        self.0.signature()
+    impl BatsatWrapper {
+        pub fn batsat_ref(&self) -> &rustsat_batsat::Solver<AsyncInterrupt> {
+            &self.0
+        }
+        pub fn batsat_mut(&mut self) -> &mut rustsat_batsat::Solver<AsyncInterrupt> {
+            &mut self.0
+        }
     }
 
-    fn reserve(&mut self, max_var: Var) -> anyhow::Result<()> {
-        self.0.reserve(max_var)
+    use rustsat::{
+        solvers::{
+            Interrupt, InterruptSolver, Solve, SolveIncremental, SolveStats, SolverResult,
+            SolverStats,
+        },
+        types::{Cl, Clause, Lit, TernaryVal, Var},
+    };
+
+    pub struct InterruptHandleWrapper(AsyncInterruptHandle);
+
+    impl InterruptSolver for InterruptHandleWrapper {
+        fn interrupt(&self) {
+            self.0.interrupt_async()
+        }
     }
 
-    fn solve(&mut self) -> anyhow::Result<SolverResult> {
-        self.0.solve()
+    impl Interrupt for BatsatWrapper {
+        type Interrupter = InterruptHandleWrapper;
+
+        fn interrupter(&mut self) -> Self::Interrupter {
+            InterruptHandleWrapper(self.0.batsat_ref().cb().get_handle())
+        }
     }
 
-    fn lit_val(&self, lit: Lit) -> anyhow::Result<TernaryVal> {
-        self.0.lit_val(lit)
+    // Trait forwards for Batsat
+
+    impl Extend<Clause> for BatsatWrapper {
+        fn extend<T: IntoIterator<Item = Clause>>(&mut self, iter: T) {
+            self.0.extend(iter);
+        }
     }
 
-    fn add_clause_ref<C>(&mut self, clause: &C) -> anyhow::Result<()>
+    impl<'a, C> Extend<&'a C> for BatsatWrapper
     where
         C: AsRef<Cl> + ?Sized,
     {
-        self.0.add_clause_ref(clause)
-    }
-}
-
-impl SolveIncremental for BatsatWrapper {
-    fn solve_assumps(&mut self, assumps: &[Lit]) -> anyhow::Result<SolverResult> {
-        self.solve_assumps(assumps)
+        fn extend<T: IntoIterator<Item = &'a C>>(&mut self, iter: T) {
+            self.0.extend(iter);
+        }
     }
 
-    fn core(&mut self) -> anyhow::Result<Vec<Lit>> {
-        self.core()
-    }
-}
+    impl Solve for BatsatWrapper {
+        fn signature(&self) -> &'static str {
+            self.0.signature()
+        }
 
-impl SolveStats for BatsatWrapper {
-    fn stats(&self) -> SolverStats {
-        self.0.stats()
-    }
+        fn reserve(&mut self, max_var: Var) -> anyhow::Result<()> {
+            self.0.reserve(max_var)
+        }
 
-    fn n_sat_solves(&self) -> usize {
-        self.0.n_sat_solves()
-    }
+        fn solve(&mut self) -> anyhow::Result<SolverResult> {
+            self.0.solve()
+        }
 
-    fn n_unsat_solves(&self) -> usize {
-        self.0.n_unsat_solves()
-    }
+        fn lit_val(&self, lit: Lit) -> anyhow::Result<TernaryVal> {
+            self.0.lit_val(lit)
+        }
 
-    fn n_terminated(&self) -> usize {
-        self.0.n_terminated()
-    }
-
-    fn n_solves(&self) -> usize {
-        self.0.n_solves()
-    }
-
-    fn n_clauses(&self) -> usize {
-        self.0.n_clauses()
+        fn add_clause_ref<C>(&mut self, clause: &C) -> anyhow::Result<()>
+        where
+            C: AsRef<Cl> + ?Sized,
+        {
+            self.0.add_clause_ref(clause)
+        }
     }
 
-    fn max_var(&self) -> Option<Var> {
-        self.0.max_var()
+    impl SolveIncremental for BatsatWrapper {
+        fn solve_assumps(&mut self, assumps: &[Lit]) -> anyhow::Result<SolverResult> {
+            self.solve_assumps(assumps)
+        }
+
+        fn core(&mut self) -> anyhow::Result<Vec<Lit>> {
+            self.core()
+        }
     }
 
-    fn n_vars(&self) -> usize {
-        self.0.n_vars()
-    }
+    impl SolveStats for BatsatWrapper {
+        fn stats(&self) -> SolverStats {
+            self.0.stats()
+        }
 
-    fn avg_clause_len(&self) -> f32 {
-        self.0.avg_clause_len()
-    }
+        fn n_sat_solves(&self) -> usize {
+            self.0.n_sat_solves()
+        }
 
-    fn cpu_solve_time(&self) -> Duration {
-        self.0.cpu_solve_time()
+        fn n_unsat_solves(&self) -> usize {
+            self.0.n_unsat_solves()
+        }
+
+        fn n_terminated(&self) -> usize {
+            self.0.n_terminated()
+        }
+
+        fn n_solves(&self) -> usize {
+            self.0.n_solves()
+        }
+
+        fn n_clauses(&self) -> usize {
+            self.0.n_clauses()
+        }
+
+        fn max_var(&self) -> Option<Var> {
+            self.0.max_var()
+        }
+
+        fn n_vars(&self) -> usize {
+            self.0.n_vars()
+        }
+
+        fn avg_clause_len(&self) -> f32 {
+            self.0.avg_clause_len()
+        }
+
+        fn cpu_solve_time(&self) -> Duration {
+            self.0.cpu_solve_time()
+        }
     }
 }
