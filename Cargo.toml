@@ -11,7 +11,7 @@ rust-version = "1.89.0"
 [lib]
 
 [dependencies]
-rustsat = { version = "0.7.2", features = [] }
+rustsat = { version = "0.7.3", features = [] }
 assertables = "9.5.5"
 log = "0.4.27"
 test-case = "3.3.1"
@@ -21,3 +21,5 @@ new_zealand = "0.1.6"
 petgraph = "0.8.2"
 itertools = "0.14.0"
 
+[patch.crates-io] # TODO: This patches WASM compat, use crates.io version once it's released
+rustsat = { git = "https://github.com/chrjabs/rustsat" }

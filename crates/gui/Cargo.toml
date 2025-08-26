@@ -20,7 +20,7 @@ timberborn-platform-cruncher = { path = "../../." }
 egui = "0.32.1"
 log = "0.4.27"
 rustsat = { version = "0.7.2", features = [] }
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 futures = "0.3.31"
 futures-channel = "0.3.31"
 serde = { version = "1.0.219", features = ["derive"] }
@@ -46,4 +46,5 @@ rustsat-batsat = { version = "0.7.2", features = [] }
 batsat = "0.6.0"
 wasm-bindgen = "=0.2.97"
 wasm-bindgen-futures = "0.4"
-web-sys = "0.3.73"
+web-sys = { version = "0.3.73", features = ["Worker"] }
+js-sys = "0.3.73"
