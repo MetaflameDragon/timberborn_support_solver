@@ -10,11 +10,14 @@ use rustsat::{
     types::{Assignment, Cl, Clause, Lit, TernaryVal, Var},
 };
 use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
+use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
+use web_sys::Worker;
 
 pub struct SolverBackend {
     #[cfg(not(target_arch = "wasm32"))]
     rt: tokio::runtime::Runtime,
     egui_ctx: Option<egui::Context>,
+    worker: SatWorker,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -81,7 +84,7 @@ impl SolverBackend {
     }
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        Self { egui_ctx: None }
+        Self { egui_ctx: None, worker: SatWorker::new().expect("Failed to create worker") }
     }
 
     pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
@@ -96,6 +99,11 @@ impl SolverBackend {
     where
         S: Solve + Interrupt + Default + Send + 'static,
     {
+        self.worker
+            .worker
+            .post_message(&js_sys::Array::of1(&JsValue::from("Sphynx of quartz")))
+            .expect("Failed to send message to worker");
+
         let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
         let mut solver = S::default();
@@ -271,4 +279,26 @@ pub mod batsat_wrapper {
             self.0.cpu_solve_time()
         }
     }
+}
+
+#[wasm_bindgen]
+pub struct SatWorker {
+    worker: Worker,
+}
+
+impl SatWorker {
+    pub fn new() -> Result<SatWorker, JsValue> {
+        let worker = Worker::new("./worker.js")?;
+        let array = js_sys::Array::new();
+        array.push(&wasm_bindgen::module());
+        worker.post_message(&array)?;
+
+        Ok(SatWorker { worker })
+    }
+}
+
+#[wasm_bindgen]
+pub fn start_solver(item: String) -> Result<(), JsValue> {
+    web_sys::console::log_1(&JsValue::from(item));
+    Ok(())
 }
