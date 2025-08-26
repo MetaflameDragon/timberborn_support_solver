@@ -17,7 +17,7 @@ pub struct SolverBackend {
     #[cfg(not(target_arch = "wasm32"))]
     rt: tokio::runtime::Runtime,
     egui_ctx: Option<egui::Context>,
-    worker: SatWorker,
+    worker: Worker,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -84,7 +84,8 @@ impl SolverBackend {
     }
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        Self { egui_ctx: None, worker: SatWorker::new().expect("Failed to create worker") }
+        let worker = start_worker("./worker.js").expect("Failed to start worker");
+        Self { egui_ctx: None, worker }
     }
 
     pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
@@ -100,7 +101,6 @@ impl SolverBackend {
         S: Solve + Interrupt + Default + Send + 'static,
     {
         self.worker
-            .worker
             .post_message(&js_sys::Array::of1(&JsValue::from("Sphynx of quartz")))
             .expect("Failed to send message to worker");
 
@@ -142,6 +142,14 @@ impl SolverBackend {
 
         Ok(session)
     }
+}
+
+fn start_worker(path: &str) -> Result<Worker, JsValue> {
+    let worker = Worker::new(path)?;
+    let array = js_sys::Array::new();
+    array.push(&wasm_bindgen::module());
+    worker.post_message(&array)?;
+    Ok(worker)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -282,23 +290,18 @@ pub mod batsat_wrapper {
 }
 
 #[wasm_bindgen]
-pub struct SatWorker {
-    worker: Worker,
-}
-
-impl SatWorker {
-    pub fn new() -> Result<SatWorker, JsValue> {
-        let worker = Worker::new("./worker.js")?;
-        let array = js_sys::Array::new();
-        array.push(&wasm_bindgen::module());
-        worker.post_message(&array)?;
-
-        Ok(SatWorker { worker })
-    }
-}
+pub struct SatWorker {}
 
 #[wasm_bindgen]
-pub fn start_solver(item: String) -> Result<(), JsValue> {
-    web_sys::console::log_1(&JsValue::from(item));
-    Ok(())
+impl SatWorker {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Result<SatWorker, JsValue> {
+        Ok(SatWorker {})
+    }
+
+    #[wasm_bindgen]
+    pub fn start_solver(&mut self, item: String) -> Result<(), JsValue> {
+        web_sys::console::log_1(&JsValue::from(item));
+        Ok(())
+    }
 }
