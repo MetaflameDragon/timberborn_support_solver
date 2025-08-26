@@ -222,11 +222,11 @@ pub mod batsat_wrapper {
 
     impl SolveIncremental for BatsatWrapper {
         fn solve_assumps(&mut self, assumps: &[Lit]) -> anyhow::Result<SolverResult> {
-            self.solve_assumps(assumps)
+            self.0.solve_assumps(assumps)
         }
 
         fn core(&mut self) -> anyhow::Result<Vec<Lit>> {
-            self.core()
+            self.0.core()
         }
     }
 
