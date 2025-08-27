@@ -19,7 +19,7 @@ wgpu = ["eframe/wgpu", "bytemuck", "dep:wgpu"]
 timberborn-platform-cruncher = { path = "../../." }
 egui = "0.32.1"
 log = "0.4.27"
-rustsat = { version = "0.7.2", features = ["serde"] }
+rustsat = { version = "0.7.3", features = ["serde"] }
 anyhow = "1.0.99"
 futures = "0.3.31"
 futures-channel = "0.3.31"
@@ -36,15 +36,15 @@ wgpu = { version = "25.0.0", features = ["webgpu", "webgl"], optional = true }
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11.8"
-rustsat-glucose = { version = "0.7.2", features = [] }
+rustsat-glucose = { version = "0.7.3", features = [] }
 tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
 tokio-util = "0.7.16"
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-rustsat-batsat = { version = "0.7.2", features = [] }
+rustsat-batsat = { version = "0.7.3", features = [] }
 batsat = "0.6.0"
-wasm-bindgen = "=0.2.97"
+wasm-bindgen = "=0.2.100" # Note: this must match wasm-bindgen exactly!
 serde-wasm-bindgen = "0.6.5"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3.73", features = ["Worker", "DedicatedWorkerGlobalScope", "MessageEvent"] }

@@ -1,4 +1,4 @@
-importScripts('timberborn_platform_cruncher_web_app.js');
+importScripts('main.js');
 
 const {SatWorker} = wasm_bindgen;
 
