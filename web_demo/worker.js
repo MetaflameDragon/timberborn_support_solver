@@ -24,6 +24,6 @@ self.onmessage = event => {
         if (sat_worker === null) {
             sat_worker = new SatWorker();
         }
-        sat_worker.start_solver(...event.data)
+        sat_worker.handle_worker_msg(...event.data);
     }
 };

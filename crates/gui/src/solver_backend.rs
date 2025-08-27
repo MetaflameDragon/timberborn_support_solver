@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use batsat::callbacks::AsyncInterrupt;
 use futures_channel::oneshot;
 use log::warn;
 use rustsat::{
@@ -9,6 +10,7 @@ use rustsat::{
     },
     types::{Assignment, Cl, Clause, Lit, TernaryVal, Var},
 };
+use serde::{Deserialize, Serialize};
 use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 use web_sys::Worker;
@@ -100,12 +102,11 @@ impl SolverBackend {
     where
         S: Solve + Interrupt + Default + Send + 'static,
     {
-        self.worker
-            .post_message(&js_sys::Array::of1(&JsValue::from("Sphynx of quartz")))
-            .expect("Failed to send message to worker");
-
         let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
+
+        self.send_msg(&WorkerMessage::Cnf(cnf.clone()));
+
         let mut solver = S::default();
         solver.add_cnf(cnf)?;
         let (tx, rx) = oneshot::channel();
@@ -141,6 +142,15 @@ impl SolverBackend {
         }
 
         Ok(session)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn send_msg(&self, msg: &WorkerMessage) {
+        let msg = serde_wasm_bindgen::to_value(msg).expect("Failed to serialize message");
+
+        self.worker
+            .post_message(&js_sys::Array::of1(&msg))
+            .expect("Failed to send message to worker");
     }
 }
 
@@ -288,6 +298,13 @@ pub mod batsat_wrapper {
     }
 }
 
+#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize)]
+enum WorkerMessage {
+    Cnf(Cnf),
+    Interrupt,
+}
+
 #[wasm_bindgen]
 pub struct SatWorker {}
 
@@ -299,8 +316,28 @@ impl SatWorker {
     }
 
     #[wasm_bindgen]
-    pub fn start_solver(&mut self, item: String) -> Result<(), JsValue> {
-        web_sys::console::log_1(&JsValue::from(item));
+    pub fn handle_worker_msg(&mut self, msg_ser: JsValue) -> Result<(), JsValue> {
+        self.handle_msg(serde_wasm_bindgen::from_value(msg_ser)?);
         Ok(())
+    }
+}
+
+impl SatWorker {
+    fn handle_msg(&mut self, msg: WorkerMessage) {
+        match msg {
+            WorkerMessage::Cnf(cnf) => {
+                self.run_solver(cnf);
+            }
+            WorkerMessage::Interrupt => {
+                // TODO
+            }
+        }
+    }
+
+    fn run_solver(&mut self, cnf: Cnf) {
+        web_sys::console::log_1(&JsValue::from(format!("Got CNF: {} clauses", cnf.len())));
+        let mut solver = rustsat_batsat::Solver::<AsyncInterrupt>::default();
+        solver.add_cnf(cnf).unwrap();
+        let res = solver.solve().unwrap();
     }
 }
