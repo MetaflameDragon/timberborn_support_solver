@@ -146,9 +146,8 @@ impl SolverBackend {
 
 fn start_worker(path: &str) -> Result<Worker, JsValue> {
     let worker = Worker::new(path)?;
-    let array = js_sys::Array::new();
-    array.push(&wasm_bindgen::module());
-    worker.post_message(&array)?;
+    let msg_data = js_sys::Array::of1(&wasm_bindgen::module());
+    worker.post_message(&msg_data)?;
     Ok(worker)
 }
 
