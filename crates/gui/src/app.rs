@@ -36,14 +36,11 @@ struct TerrainTile {
     terrain: bool,
 }
 
-pub struct App<S>
-where
-    S: Interrupt,
-{
+pub struct App {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
     backend: SolverBackend,
-    active_session: Option<SolverSession<S>>,
+    active_session: Option<SolverSession<()>>,
     displayed_layout: Option<PlatformLayout>,
     layout_stats: PlatformLayoutStats,
     frame_history: FrameHistory,
@@ -61,10 +58,7 @@ const DEFAULT_PLATFORMS: [(PlatformDef, isize); 8] = [
     (platform_def!(5, 5), 4),
 ];
 
-impl<S> App<S>
-where
-    S: Interrupt,
-{
+impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
         backend.set_egui_ctx(cc.egui_ctx.clone());
@@ -151,40 +145,27 @@ where
         .response
     }
 
-    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult>
-    where
-        S: Solve + SolveStats,
-    {
+    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult> {
         let resp = SolverSession::try_recv(&mut self.active_session)?;
-        match resp.result {
-            Ok(SolverResult::Sat) => {
-                let asgn = resp.assignment.expect("Expected an assignment for a SAT result");
+        match resp.assignment {
+            Some(asgn) => {
                 let mut layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
                 layout.run_trivial_optimization(&self.make_world());
                 Some(SolverSessionResult::Sat { layout, limits: resp.limits, assignment: asgn })
             }
-            Ok(SolverResult::Unsat) => Some(SolverSessionResult::Unsat),
-            Ok(SolverResult::Interrupted) => {
-                info!("Solver interrupted");
-                None
-            }
-            Err(err) => {
-                error!("Solver error: {err:?}");
-                None
-            }
+            None => Some(SolverSessionResult::Unsat),
+            // TODO: Solver interrupt & error responses?
         }
     }
-    fn start_solver(&mut self, limits: PlatformLimits)
-    where
-        S: Solve + Default + Send + 'static,
-    {
+    fn start_solver(&mut self, limits: PlatformLimits) {
         let world = self.make_world();
         let encoding = Encoding::encode(
             &self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect_vec(),
             world.grid(),
         );
 
-        self.active_session.take().map(|mut session| session.interrupt());
+        // TODO
+        // self.active_session.take().map(|mut session| session.interrupt());
         self.active_session = self
             .backend
             .start(encoding, limits)
@@ -206,10 +187,7 @@ enum SolverSessionResult {
     Unsat,
 }
 
-impl<S> eframe::App for App<S>
-where
-    S: Solve + Interrupt + SolveStats + Default + Send + 'static,
-{
+impl eframe::App for App {
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
         self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
 
@@ -270,7 +248,9 @@ where
                         self.layout_stats.clear();
                         self.start_solver(limits);
                     } else {
-                        self.active_session.take().map(|mut session| session.interrupt());
+                        // TODO
+                        // self.active_session.take().map(|mut session|
+                        // session.interrupt());
                     }
                 }
 
@@ -335,7 +315,8 @@ where
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.active_session.take().map(|mut session| session.interrupt());
+        // TODO
+        // self.active_session.take().map(|mut session| session.interrupt());
     }
 }
 

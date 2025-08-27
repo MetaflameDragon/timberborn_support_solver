@@ -19,7 +19,6 @@ pub struct SolverBackend {
     #[cfg(not(target_arch = "wasm32"))]
     rt: tokio::runtime::Runtime,
     egui_ctx: Option<egui::Context>,
-    worker: Worker,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,34 +33,22 @@ pub trait SolverTraitBounds {}
 #[cfg(target_arch = "wasm32")]
 impl<T> SolverTraitBounds for T {}
 
-pub struct SolverSession<S>
-where
-    S: Interrupt,
-{
+pub struct SolverSession<I> {
     encoding: Encoding,
     limits: PlatformLimits,
-    rx: oneshot::Receiver<(anyhow::Result<SolverResult>, S)>,
-    interrupter: S::Interrupter,
+    rx: oneshot::Receiver<Option<Assignment>>,
+    interrupter: I,
 }
 
-impl<S> SolverSession<S>
-where
-    S: Interrupt,
-{
-    pub fn try_recv(maybe_self: &mut Option<Self>) -> Option<SolverResponse>
-    where
-        S: Solve + SolveStats,
-    {
+impl<I> SolverSession<I> {
+    pub fn try_recv(maybe_self: &mut Option<Self>) -> Option<SolverResponse> {
         // Both empty and closed is okay
         // Closed also implies the value has already been received
         let session = maybe_self.as_mut()?;
         match session.rx.try_recv().transpose()? {
-            Ok((result, solver)) => {
+            Ok(assignment) => {
                 let SolverSession { encoding, limits, .. } = maybe_self.take().unwrap();
-                let assignment = matches!(result, Ok(SolverResult::Sat)).then(|| {
-                    solver.full_solution().expect("Expected an assignment when the result was Sat")
-                });
-                Some(SolverResponse { result, assignment, encoding, limits })
+                Some(SolverResponse { assignment, encoding, limits })
             }
             Err(_) => {
                 // Not running or already done
@@ -71,7 +58,9 @@ where
             }
         }
     }
+}
 
+impl<I: InterruptSolver> SolverSession<I> {
     pub fn interrupt(&mut self) {
         self.interrupter.interrupt();
     }
@@ -79,7 +68,6 @@ where
 
 #[derive(Debug)]
 pub struct SolverResponse {
-    pub result: anyhow::Result<SolverResult>,
     pub assignment: Option<Assignment>,
     pub encoding: Encoding,
     pub limits: PlatformLimits,
@@ -92,85 +80,63 @@ impl SolverBackend {
     }
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        let worker = start_worker("./worker.js").expect("Failed to start worker");
-
-        use wasm_bindgen::prelude::*;
-
-        let onmessage = Closure::wrap(Box::new({
-            move |msg: MessageEvent| {
-                let response: WorkerResponse = serde_wasm_bindgen::from_value(msg.data())
-                    .expect("Failed to deserialize WorkerResponse");
-                web_sys::console::log_1(&format!("Got response: {response:?}").into());
-            }
-        }) as Box<dyn Fn(MessageEvent)>);
-
-        worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-        onmessage.forget(); // The closure needs to be leaked
-
-        Self { egui_ctx: None, worker }
+        Self { egui_ctx: None }
     }
 
     pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
         self.egui_ctx = Some(ctx);
     }
 
-    pub fn start<S>(
+    pub fn start(
         &mut self,
         encoding: Encoding,
         limits: PlatformLimits,
-    ) -> anyhow::Result<SolverSession<S>>
-    where
-        S: Solve + Interrupt + Default + Send + 'static,
-    {
+    ) -> anyhow::Result<SolverSession<()>> {
         let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
 
-        self.send_msg(&WorkerMessage::Cnf(cnf.clone()));
-
-        let mut solver = S::default();
-        solver.add_cnf(cnf)?;
         let (tx, rx) = oneshot::channel();
-        let interrupter = solver.interrupter();
 
-        let session = SolverSession::<S> { encoding, limits, rx, interrupter };
+        let session = SolverSession { encoding, limits, rx, interrupter: () };
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            _ = self.rt.spawn_blocking({
-                let ctx = self.egui_ctx.clone();
-                move || {
-                    // If sending fails, the backend has dropped the receiver
-                    _ = tx.send((solver.solve(), solver));
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
+        let worker = start_worker("./worker.js").expect("Failed to start worker");
+
+        use wasm_bindgen::prelude::*;
+
+        let onmessage = Closure::wrap(Box::new({
+            let mut tx = Some(tx);
+            move |msg: MessageEvent| {
+                let response: WorkerResponse = serde_wasm_bindgen::from_value(msg.data())
+                    .expect("Failed to deserialize WorkerResponse");
+                web_sys::console::log_1(&format!("Got response: {response:?}").into());
+                match tx.take() {
+                    None => {
+                        web_sys::console::warn_1(
+                            &"Attempted to use SAT worker oneshot tx twice".into(),
+                        );
+                    }
+                    Some(tx) => {
+                        // Ignore error
+                        _ = match response {
+                            WorkerResponse::Assignment(asgn) => tx.send(Some(asgn)),
+
+                            WorkerResponse::Unsat => tx.send(None),
+                            WorkerResponse::Interrupted => tx.send(None),
+                        };
                     }
                 }
-            });
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            wasm_bindgen_futures::spawn_local({
-                let ctx = self.egui_ctx.clone();
-                async move || {
-                    // If sending fails, the backend has dropped the receiver
-                    _ = tx.send((solver.solve(), solver));
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
-                    }
-                }
-            }());
-        }
+            }
+        }) as Box<dyn FnMut(MessageEvent)>);
+
+        worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        onmessage.forget(); // The closure needs to be leaked
+
+        let msg = serde_wasm_bindgen::to_value(&WorkerMessage::Cnf(cnf))
+            .expect("Failed to serialize message");
+
+        worker.post_message(&js_sys::Array::of1(&msg)).expect("Failed to send message to worker");
 
         Ok(session)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn send_msg(&self, msg: &WorkerMessage) {
-        let msg = serde_wasm_bindgen::to_value(msg).expect("Failed to serialize message");
-
-        self.worker
-            .post_message(&js_sys::Array::of1(&msg))
-            .expect("Failed to send message to worker");
     }
 }
 
@@ -329,6 +295,8 @@ enum WorkerMessage {
 #[derive(Serialize, Deserialize)]
 enum WorkerResponse {
     Assignment(Assignment),
+    Unsat,
+    Interrupted,
 }
 
 #[wasm_bindgen]
@@ -374,8 +342,12 @@ impl SatWorker {
                 let asgn = solver.full_solution().unwrap();
                 self.respond(&WorkerResponse::Assignment(asgn));
             }
-            SolverResult::Unsat => {}
-            SolverResult::Interrupted => {}
+            SolverResult::Unsat => {
+                self.respond(&WorkerResponse::Unsat);
+            }
+            SolverResult::Interrupted => {
+                self.respond(&WorkerResponse::Interrupted);
+            }
         }
     }
 

@@ -44,7 +44,7 @@ impl WebHandle {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(App::<BatsatWrapper>::new(cc, backend)))),
+                Box::new(|cc| Ok(Box::new(App::new(cc, backend)))),
             )
             .await
     }
@@ -57,7 +57,7 @@ impl WebHandle {
     /// Example on how to call into your app from JavaScript.
     #[wasm_bindgen]
     pub fn example(&self) {
-        if let Some(_app) = self.runner.app_mut::<App<BatsatWrapper>>() {
+        if let Some(_app) = self.runner.app_mut::<App>() {
             // _app.example();
         }
     }
