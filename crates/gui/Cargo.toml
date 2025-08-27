@@ -47,5 +47,5 @@ batsat = "0.6.0"
 wasm-bindgen = "=0.2.97"
 serde-wasm-bindgen = "0.6.5"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3.73", features = ["Worker"] }
+web-sys = { version = "0.3.73", features = ["Worker", "DedicatedWorkerGlobalScope", "MessageEvent"] }
 js-sys = "0.3.73"

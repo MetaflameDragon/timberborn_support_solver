@@ -151,23 +151,18 @@ where
         .response
     }
 
-    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult<S>>
+    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult>
     where
         S: Solve + SolveStats,
     {
         let resp = SolverSession::try_recv(&mut self.active_session)?;
         match resp.result {
-            Ok(SolverResult::Sat) => match resp.solver.full_solution() {
-                Ok(asgn) => {
-                    let mut layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
-                    layout.run_trivial_optimization(&self.make_world());
-                    Some(SolverSessionResult::Sat { layout, response: resp, assignment: asgn })
-                }
-                Err(err) => {
-                    error!("Failed to get assignment, but the solver reported SAT: {err:?}");
-                    None
-                }
-            },
+            Ok(SolverResult::Sat) => {
+                let asgn = resp.assignment.expect("Expected an assignment for a SAT result");
+                let mut layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
+                layout.run_trivial_optimization(&self.make_world());
+                Some(SolverSessionResult::Sat { layout, limits: resp.limits, assignment: asgn })
+            }
             Ok(SolverResult::Unsat) => Some(SolverSessionResult::Unsat),
             Ok(SolverResult::Interrupted) => {
                 info!("Solver interrupted");
@@ -206,8 +201,8 @@ where
 }
 
 #[derive(Debug)]
-enum SolverSessionResult<S> {
-    Sat { layout: PlatformLayout, response: SolverResponse<S>, assignment: Assignment },
+enum SolverSessionResult {
+    Sat { layout: PlatformLayout, limits: PlatformLimits, assignment: Assignment },
     Unsat,
 }
 
@@ -223,11 +218,7 @@ where
             Some(SolverSessionResult::Unsat) => {
                 info!("Unsat");
             }
-            Some(SolverSessionResult::Sat {
-                layout,
-                response: SolverResponse { mut limits, .. },
-                ..
-            }) => {
+            Some(SolverSessionResult::Sat { layout, mut limits, .. }) => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
                 // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {

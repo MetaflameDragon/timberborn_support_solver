@@ -13,7 +13,7 @@ use rustsat::{
 use serde::{Deserialize, Serialize};
 use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
-use web_sys::Worker;
+use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
 
 pub struct SolverBackend {
     #[cfg(not(target_arch = "wasm32"))]
@@ -48,14 +48,20 @@ impl<S> SolverSession<S>
 where
     S: Interrupt,
 {
-    pub fn try_recv(maybe_self: &mut Option<Self>) -> Option<SolverResponse<S>> {
+    pub fn try_recv(maybe_self: &mut Option<Self>) -> Option<SolverResponse>
+    where
+        S: Solve + SolveStats,
+    {
         // Both empty and closed is okay
         // Closed also implies the value has already been received
         let session = maybe_self.as_mut()?;
         match session.rx.try_recv().transpose()? {
             Ok((result, solver)) => {
                 let SolverSession { encoding, limits, .. } = maybe_self.take().unwrap();
-                Some(SolverResponse { result, solver, encoding, limits })
+                let assignment = matches!(result, Ok(SolverResult::Sat)).then(|| {
+                    solver.full_solution().expect("Expected an assignment when the result was Sat")
+                });
+                Some(SolverResponse { result, assignment, encoding, limits })
             }
             Err(_) => {
                 // Not running or already done
@@ -72,9 +78,9 @@ where
 }
 
 #[derive(Debug)]
-pub struct SolverResponse<S> {
+pub struct SolverResponse {
     pub result: anyhow::Result<SolverResult>,
-    pub solver: S,
+    pub assignment: Option<Assignment>,
     pub encoding: Encoding,
     pub limits: PlatformLimits,
 }
@@ -87,6 +93,20 @@ impl SolverBackend {
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
         let worker = start_worker("./worker.js").expect("Failed to start worker");
+
+        use wasm_bindgen::prelude::*;
+
+        let onmessage = Closure::wrap(Box::new({
+            move |msg: MessageEvent| {
+                let response: WorkerResponse = serde_wasm_bindgen::from_value(msg.data())
+                    .expect("Failed to deserialize WorkerResponse");
+                web_sys::console::log_1(&format!("Got response: {response:?}").into());
+            }
+        }) as Box<dyn Fn(MessageEvent)>);
+
+        worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        onmessage.forget(); // The closure needs to be leaked
+
         Self { egui_ctx: None, worker }
     }
 
@@ -305,14 +325,23 @@ enum WorkerMessage {
     Interrupt,
 }
 
+#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize)]
+enum WorkerResponse {
+    Assignment(Assignment),
+}
+
 #[wasm_bindgen]
-pub struct SatWorker {}
+pub struct SatWorker {
+    scope: DedicatedWorkerGlobalScope,
+}
 
 #[wasm_bindgen]
 impl SatWorker {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Result<SatWorker, JsValue> {
-        Ok(SatWorker {})
+        let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
+        Ok(SatWorker { scope })
     }
 
     #[wasm_bindgen]
@@ -339,5 +368,18 @@ impl SatWorker {
         let mut solver = rustsat_batsat::Solver::<AsyncInterrupt>::default();
         solver.add_cnf(cnf).unwrap();
         let res = solver.solve().unwrap();
+
+        match res {
+            SolverResult::Sat => {
+                let asgn = solver.full_solution().unwrap();
+                self.respond(&WorkerResponse::Assignment(asgn));
+            }
+            SolverResult::Unsat => {}
+            SolverResult::Interrupted => {}
+        }
+    }
+
+    fn respond(&self, response: &WorkerResponse) {
+        self.scope.post_message(&serde_wasm_bindgen::to_value(response).unwrap()).unwrap();
     }
 }
