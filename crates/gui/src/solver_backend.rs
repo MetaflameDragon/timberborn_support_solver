@@ -308,6 +308,7 @@ pub struct SatWorker {
 impl SatWorker {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Result<SatWorker, JsValue> {
+        console_error_panic_hook::set_once();
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
         Ok(SatWorker { scope })
     }
@@ -334,24 +335,38 @@ impl SatWorker {
     fn run_solver(&mut self, cnf: Cnf) {
         web_sys::console::log_1(&JsValue::from(format!("Got CNF: {} clauses", cnf.len())));
         let mut solver = rustsat_batsat::Solver::<AsyncInterrupt>::default();
-        solver.add_cnf(cnf).unwrap();
-        let res = solver.solve().unwrap();
+        solver.add_cnf(cnf).expect("Failed to add CNF");
+        web_sys::console::log_1(&JsValue::from("Running solver"));
+        let res = match solver.solve() {
+            Ok(res) => res,
+            Err(err) => {
+                web_sys::console::error_1(&JsValue::from(format!("Error while solving: {err:?}")));
+                return;
+            }
+        };
 
         match res {
             SolverResult::Sat => {
-                let asgn = solver.full_solution().unwrap();
+                web_sys::console::log_1(&JsValue::from("SAT"));
+                let asgn = solver.full_solution().expect("Error while getting solution");
                 self.respond(&WorkerResponse::Assignment(asgn));
             }
             SolverResult::Unsat => {
+                web_sys::console::log_1(&JsValue::from("UNSAT"));
                 self.respond(&WorkerResponse::Unsat);
             }
             SolverResult::Interrupted => {
+                web_sys::console::log_1(&JsValue::from("Interrupted"));
                 self.respond(&WorkerResponse::Interrupted);
             }
         }
     }
 
     fn respond(&self, response: &WorkerResponse) {
-        self.scope.post_message(&serde_wasm_bindgen::to_value(response).unwrap()).unwrap();
+        self.scope
+            .post_message(
+                &serde_wasm_bindgen::to_value(response).expect("Error serializing response"),
+            )
+            .expect("Error sending response message");
     }
 }

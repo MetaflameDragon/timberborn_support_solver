@@ -812,6 +812,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -873,11 +883,8 @@ dependencies = [
 [[package]]
 name = "cpu-time"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
 dependencies = [
- "libc",
- "winapi",
+ "web-time",
 ]
 
 [[package]]
@@ -2569,7 +2576,8 @@ dependencies = [
 [[package]]
 name = "pigeons"
 version = "0.2.1"
-source = "git+https://github.com/chrjabs/rustsat.git?rev=57261f5c4993ad3bb1e38986ca9c238ed7a328d0#57261f5c4993ad3bb1e38986ca9c238ed7a328d0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fda9a88c692cfeefef45fe7bd8eaed27ff849bfcbcf8819fdfc50a6df0af863"
 dependencies = [
  "itertools 0.14.0",
  "rustc-hash 2.1.1",
@@ -2858,7 +2866,8 @@ dependencies = [
 [[package]]
 name = "rustsat"
 version = "0.7.3"
-source = "git+https://github.com/chrjabs/rustsat.git?rev=57261f5c4993ad3bb1e38986ca9c238ed7a328d0#57261f5c4993ad3bb1e38986ca9c238ed7a328d0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d66b9fbd8a3e08ad437829e0957568b2f7fffad2900f6bdc768739d2f922375"
 dependencies = [
  "anyhow",
  "cpu-time",
@@ -2874,10 +2883,12 @@ dependencies = [
 [[package]]
 name = "rustsat-batsat"
 version = "0.7.3"
-source = "git+https://github.com/chrjabs/rustsat.git?rev=57261f5c4993ad3bb1e38986ca9c238ed7a328d0#57261f5c4993ad3bb1e38986ca9c238ed7a328d0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3deca89df00630c7df59dec11d706b97bfb83680a5b304555c5291c91dd837e9"
 dependencies = [
  "anyhow",
  "batsat",
+ "cpu-time",
  "rustsat",
  "thiserror 2.0.16",
 ]
@@ -3279,6 +3290,7 @@ dependencies = [
  "anyhow",
  "batsat",
  "bytemuck",
+ "console_error_panic_hook",
  "derive_more",
  "eframe",
  "egui",

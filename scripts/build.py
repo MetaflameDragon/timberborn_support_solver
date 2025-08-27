@@ -82,7 +82,7 @@ subprocess.run(
         "--target",
         "no-modules",
 
-        "--no-typescript"
+        "--no-typescript",
     ],
     cwd=project_dir,
 ).check_returncode()
