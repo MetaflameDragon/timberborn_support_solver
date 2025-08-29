@@ -8,6 +8,8 @@ scripts_dir = os.path.dirname(__file__)
 project_dir = os.path.abspath(os.path.join(scripts_dir, '..'))
 
 build_release = len(sys.argv) > 1 and sys.argv[1] == "release"
+wasm_strip = build_release
+wasm_opt = build_release
 package_name = "timberborn-platform-cruncher-gui"
 wasm_out_name = "main"
 wasm_opt_flags = ["-O2", "--fast-math"]
@@ -87,9 +89,17 @@ subprocess.run(
     cwd=project_dir,
 ).check_returncode()
 
-# TODO: wasm-strip
+# TODO Currently breaks wasm_opt
+# if wasm_strip:
+#     print("Running wasm-strip")
+#     subprocess.run(
+#         [
+#             "wasm-strip",
+#             wasm_out_bin_path,
+#         ]
+#     ).check_returncode()
 
-if build_release:
+if wasm_opt:
     print("Running wasm-opt")
     subprocess.run(
         [
@@ -102,4 +112,4 @@ if build_release:
             "-o",
             wasm_out_bin_path,
         ],
-    )
+    ).check_returncode()
