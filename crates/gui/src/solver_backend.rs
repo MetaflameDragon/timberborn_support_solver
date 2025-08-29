@@ -22,7 +22,10 @@ use timberborn_platform_cruncher::{
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
 
-use crate::solver_backend::batsat_wrapper::OnceLockInterrupter;
+use crate::solver_backend::{
+    batsat_wrapper::OnceLockInterrupter,
+    problem::{Problem, SessionData, Solution},
+};
 
 pub struct SolverBackend {
     #[cfg(not(target_arch = "wasm32"))]
@@ -83,13 +86,8 @@ impl<I: InterruptSolver> SolverSession<I> {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionData {
-    pub decoder: Decoder,
-    pub limits: PlatformLimits,
-}
-#[derive(Debug, Clone)]
 pub enum SolverResponse {
-    Sat(Assignment),
+    Sat(Solution),
     Unsat,
     Interrupted,
 }
@@ -119,14 +117,13 @@ impl SolverBackend {
         &mut self,
         problem: Problem,
     ) -> anyhow::Result<SolverSession<OnceLockInterrupter>> {
-        let encoding = Encoding::encode(&problem.platform_defs, problem.world.grid());
-        let (instance, decoder) = encoding.with_limits(&problem.limits);
-        let (cnf, _var_manager) = instance.into_cnf();
+        let encoding =
+            Encoding::encode(&problem.static_data.platform_defs, problem.static_data.world.grid());
 
         let (tx, rx) = oneshot::channel();
 
         let session = SolverSession {
-            session_data: SessionData { decoder, limits: problem.limits.clone() },
+            session_data: problem.session_data.clone(),
             rx,
             interrupter: OnceLockInterrupter::default(),
             was_interrupted: AtomicBool::new(false),
@@ -156,7 +153,7 @@ impl SolverBackend {
                         }
                         None
                     }
-                    WorkerResponse::Assignment(asgn) => Some(SolverResponse::Sat(asgn)),
+                    WorkerResponse::Sat(solution) => Some(SolverResponse::Sat(solution)),
                     WorkerResponse::Unsat => Some(SolverResponse::Unsat),
                     WorkerResponse::Interrupted => Some(SolverResponse::Interrupted),
                 };
@@ -180,7 +177,7 @@ impl SolverBackend {
         worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         onmessage.forget(); // The closure needs to be leaked
 
-        let msg = serde_wasm_bindgen::to_value(&WorkerMessage::Cnf(cnf))
+        let msg = serde_wasm_bindgen::to_value(&WorkerMessage::Problem(problem))
             .expect("Failed to serialize message");
 
         worker.post_message(&js_sys::Array::of1(&msg)).expect("Failed to send message to worker");
@@ -196,11 +193,39 @@ fn start_worker(path: &str) -> Result<Worker, JsValue> {
     Ok(worker)
 }
 
-#[derive(Clone, Debug)]
-pub struct Problem {
-    pub platform_defs: Vec<PlatformDef>,
-    pub world: World,
-    pub limits: PlatformLimits,
+pub mod problem {
+    use serde::{Deserialize, Serialize};
+    use timberborn_platform_cruncher::{
+        encoder::{PlatformLayout, PlatformLimits},
+        platform::PlatformDef,
+        world::World,
+    };
+
+    #[derive(Clone, Debug)]
+    #[derive(Serialize, Deserialize)]
+    pub struct Problem {
+        pub static_data: StaticData,
+        pub session_data: SessionData,
+    }
+
+    #[derive(Clone, Debug)]
+    #[derive(Serialize, Deserialize)]
+    pub struct StaticData {
+        pub platform_defs: Vec<PlatformDef>,
+        pub world: World,
+    }
+
+    #[derive(Clone, Debug)]
+    #[derive(Serialize, Deserialize)]
+    pub struct SessionData {
+        pub limits: PlatformLimits,
+    }
+
+    #[derive(Clone, Debug)]
+    #[derive(Serialize, Deserialize)]
+    pub struct Solution {
+        pub layout: PlatformLayout,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -387,7 +412,7 @@ pub mod batsat_wrapper {
 #[derive(Clone, Debug)]
 #[derive(Serialize, Deserialize)]
 enum WorkerMessage {
-    Cnf(Cnf),
+    Problem(Problem),
     Interrupt,
 }
 
@@ -395,7 +420,7 @@ enum WorkerMessage {
 #[derive(Serialize, Deserialize)]
 enum WorkerResponse {
     InterruptHandle { ptr: u32 },
-    Assignment(Assignment),
+    Sat(Solution),
     Unsat,
     Interrupted,
 }
@@ -424,8 +449,8 @@ impl SatWorker {
 impl SatWorker {
     fn handle_msg(&mut self, msg: WorkerMessage) {
         match msg {
-            WorkerMessage::Cnf(cnf) => {
-                self.run_solver(cnf);
+            WorkerMessage::Problem(problem) => {
+                self.run_solver(problem);
             }
             WorkerMessage::Interrupt => {
                 // TODO
@@ -433,8 +458,15 @@ impl SatWorker {
         }
     }
 
-    fn run_solver(&mut self, cnf: Cnf) {
-        web_sys::console::log_1(&JsValue::from(format!("Got CNF: {} clauses", cnf.len())));
+    fn run_solver(&mut self, problem: Problem) {
+        web_sys::console::log_1(&"Starting solver".into());
+        let encoding =
+            Encoding::encode(&problem.static_data.platform_defs, problem.static_data.world.grid());
+        let (instance, decoder) = encoding.with_limits(&problem.session_data.limits);
+        let (cnf, _var_manager) = instance.into_cnf();
+
+        web_sys::console::log_1(&format!("Encoded CNF: {} clauses", cnf.len()).into());
+
         let mut solver = rustsat_batsat::Solver::<AsyncInterrupt>::default();
         solver.add_cnf(cnf).expect("Failed to add CNF");
         let handle = Box::new(solver.batsat_ref().cb().get_handle());
@@ -458,7 +490,12 @@ impl SatWorker {
             SolverResult::Sat => {
                 web_sys::console::log_1(&JsValue::from("SAT"));
                 let asgn = solver.full_solution().expect("Error while getting solution");
-                self.respond(&WorkerResponse::Assignment(asgn))
+
+                let mut layout = decoder.decode_assignment(&asgn);
+                layout.run_trivial_optimization(&problem.static_data.world);
+
+                let solution = Solution { layout };
+                self.respond(&WorkerResponse::Sat(solution))
             }
             SolverResult::Unsat => {
                 web_sys::console::log_1(&JsValue::from("UNSAT"));

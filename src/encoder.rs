@@ -438,6 +438,7 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    #[must_use]
     pub fn decode_assignment(&self, assignment: &Assignment) -> PlatformLayout {
         let mut platforms = HashMap::new();
 

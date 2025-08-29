@@ -8,6 +8,7 @@ use itertools::Itertools;
 use log::trace;
 use new_zealand::nz;
 use rustsat::types::Assignment;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     TERRAIN_SUPPORT_DISTANCE,
@@ -18,6 +19,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct PlatformLayout {
     pub platforms: HashMap<Point, Platform>,
 }

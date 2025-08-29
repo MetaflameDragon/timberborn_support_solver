@@ -26,8 +26,9 @@ use timberborn_platform_cruncher::{
 use crate::{
     app::{frame_history::FrameHistory, solver_controls::SolverControlsResponse},
     solver_backend::{
-        Problem, SessionResult, SolverBackend, SolverResponse, SolverSession,
+        SessionResult, SolverBackend, SolverResponse, SolverSession,
         batsat_wrapper::OnceLockInterrupter,
+        problem::{Problem, SessionData, Solution, StaticData},
     },
 };
 
@@ -152,16 +153,11 @@ impl App {
         let SessionResult { solver_response, session_data, was_interrupted } =
             SolverSession::try_recv(&mut self.active_session)?;
         match solver_response {
-            SolverResponse::Sat(asgn) => {
-                let mut layout = session_data.decoder.decode_assignment(&asgn);
-                layout.run_trivial_optimization(&self.make_world());
-                Some(SolverSessionResult::Sat {
-                    layout,
-                    limits: session_data.limits,
-                    assignment: asgn,
-                    was_interrupted,
-                })
-            }
+            SolverResponse::Sat(solution) => Some(SolverSessionResult::Sat {
+                solution,
+                limits: session_data.limits,
+                was_interrupted,
+            }),
             SolverResponse::Unsat => Some(SolverSessionResult::Unsat),
             SolverResponse::Interrupted => Some(SolverSessionResult::Interrupted),
         }
@@ -175,7 +171,10 @@ impl App {
         self.active_session.as_ref().map(|session| session.interrupt());
         self.active_session = self
             .backend
-            .start(Problem { platform_defs, world, limits })
+            .start(Problem {
+                static_data: StaticData { world, platform_defs },
+                session_data: SessionData { limits },
+            })
             .map_err(|err| {
                 error!("Failed to start solver: {err}");
             })
@@ -192,7 +191,7 @@ impl App {
             SolverSessionResult::Unsat => {
                 info!("Unsat");
             }
-            SolverSessionResult::Sat { layout, mut limits, was_interrupted, .. } => {
+            SolverSessionResult::Sat { solution, mut limits, was_interrupted, .. } => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
                 // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
@@ -207,11 +206,11 @@ impl App {
                 if was_interrupted {
                     info!("Session finished, but it was interrupted - aborting");
                 } else {
-                    let weight = layout.total_weight(&limits.weights);
+                    let weight = solution.layout.total_weight(&limits.weights);
 
                     info!("Got a solution with weight {weight}");
                     self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
-                    self.displayed_layout = Some(layout);
+                    self.displayed_layout = Some(solution.layout);
 
                     if let Some(weight_subtracted) = weight.checked_sub(1)
                         && weight_subtracted > 0
@@ -234,12 +233,7 @@ impl App {
 
 #[derive(Debug)]
 enum SolverSessionResult {
-    Sat {
-        layout: PlatformLayout,
-        limits: PlatformLimits,
-        assignment: Assignment,
-        was_interrupted: bool,
-    },
+    Sat { limits: PlatformLimits, solution: Solution, was_interrupted: bool },
     Unsat,
     Interrupted,
 }
