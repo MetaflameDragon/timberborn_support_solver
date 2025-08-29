@@ -19,38 +19,10 @@ use crate::{
 
 #[derive(Clone, Debug, Default)]
 pub struct PlatformLayout {
-    platforms: HashMap<Point, Platform>,
+    pub platforms: HashMap<Point, Platform>,
 }
 
 impl PlatformLayout {
-    pub fn from_assignment(assignment: &Assignment, vars: &EncodingVars) -> Self {
-        let mut platforms = HashMap::new();
-
-        // iter() goes over all assigned literals (excl. DontCare)
-        for (lit, plat) in assignment
-            .iter()
-            .filter_map(|lit| Some((lit, lit.is_pos().then(|| vars.var_to_platform(lit.var()))??)))
-        {
-            platforms
-                .entry(plat.point())
-                .and_modify(|previous: &mut Platform| {
-                    if previous.def().dims() < plat.def().dims() {
-                        // Update only if larger
-                        *previous = plat;
-                    }
-                })
-                .or_insert(plat);
-
-            trace!(
-                target: "solution_lit",
-                "Active literal: {}", vars.lit_readable_name(lit).unwrap_or(format!("{lit:?}"))
-            );
-            trace!(target: "solution_lit", "=> {plat:?}");
-        }
-
-        PlatformLayout { platforms }
-    }
-
     pub fn platforms(&self) -> &HashMap<Point, Platform> {
         &self.platforms
     }

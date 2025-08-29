@@ -14,7 +14,11 @@ use rustsat::{
     types::{Assignment, Cl, Clause, Lit, TernaryVal, Var},
 };
 use serde::{Deserialize, Serialize};
-use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
+use timberborn_platform_cruncher::{
+    encoder::{Decoder, Encoding, PlatformLimits},
+    platform::PlatformDef,
+    world::World,
+};
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
 
@@ -80,7 +84,7 @@ impl<I: InterruptSolver> SolverSession<I> {
 
 #[derive(Debug, Clone)]
 pub struct SessionData {
-    pub encoding: Encoding,
+    pub decoder: Decoder,
     pub limits: PlatformLimits,
 }
 #[derive(Debug, Clone)]
@@ -113,16 +117,16 @@ impl SolverBackend {
 
     pub fn start(
         &mut self,
-        encoding: Encoding,
-        limits: PlatformLimits,
+        problem: Problem,
     ) -> anyhow::Result<SolverSession<OnceLockInterrupter>> {
-        let instance = encoding.with_limits(&limits);
+        let encoding = Encoding::encode(&problem.platform_defs, problem.world.grid());
+        let (instance, decoder) = encoding.with_limits(&problem.limits);
         let (cnf, _var_manager) = instance.into_cnf();
 
         let (tx, rx) = oneshot::channel();
 
         let session = SolverSession {
-            session_data: SessionData { encoding, limits },
+            session_data: SessionData { decoder, limits: problem.limits.clone() },
             rx,
             interrupter: OnceLockInterrupter::default(),
             was_interrupted: AtomicBool::new(false),
@@ -190,6 +194,13 @@ fn start_worker(path: &str) -> Result<Worker, JsValue> {
     let msg_data = js_sys::Array::of2(&wasm_bindgen::module(), &wasm_bindgen::memory());
     worker.post_message(&msg_data)?;
     Ok(worker)
+}
+
+#[derive(Clone, Debug)]
+pub struct Problem {
+    pub platform_defs: Vec<PlatformDef>,
+    pub world: World,
+    pub limits: PlatformLimits,
 }
 
 #[cfg(target_arch = "wasm32")]

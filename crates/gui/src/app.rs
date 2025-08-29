@@ -26,7 +26,7 @@ use timberborn_platform_cruncher::{
 use crate::{
     app::{frame_history::FrameHistory, solver_controls::SolverControlsResponse},
     solver_backend::{
-        SessionResult, SolverBackend, SolverResponse, SolverSession,
+        Problem, SessionResult, SolverBackend, SolverResponse, SolverSession,
         batsat_wrapper::OnceLockInterrupter,
     },
 };
@@ -153,8 +153,7 @@ impl App {
             SolverSession::try_recv(&mut self.active_session)?;
         match solver_response {
             SolverResponse::Sat(asgn) => {
-                let mut layout =
-                    PlatformLayout::from_assignment(&asgn, session_data.encoding.vars());
+                let mut layout = session_data.decoder.decode_assignment(&asgn);
                 layout.run_trivial_optimization(&self.make_world());
                 Some(SolverSessionResult::Sat {
                     layout,
@@ -170,15 +169,13 @@ impl App {
 
     fn start_solver(&mut self, limits: PlatformLimits) {
         let world = self.make_world();
-        let encoding = Encoding::encode(
-            &self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect_vec(),
-            world.grid(),
-        );
+        let platform_defs =
+            self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect();
 
         self.active_session.as_ref().map(|session| session.interrupt());
         self.active_session = self
             .backend
-            .start(encoding, limits)
+            .start(Problem { platform_defs, world, limits })
             .map_err(|err| {
                 error!("Failed to start solver: {err}");
             })
