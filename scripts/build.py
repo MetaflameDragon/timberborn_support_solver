@@ -39,6 +39,10 @@ def once_if[T](cond: bool, item: T) -> tuple[T] | tuple:
 print("Ensuring that rust-src is installed")
 subprocess.run(shlex.split("rustup component add rust-src --toolchain nightly")).check_returncode()
 
+os.environ.update(
+    {"RUSTFLAGS": "-C target-feature=+atomics"}
+)
+
 print("Building")
 subprocess.run(
     [

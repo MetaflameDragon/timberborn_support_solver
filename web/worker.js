@@ -2,9 +2,10 @@ importScripts('main.js');
 
 const {SatWorker} = wasm_bindgen;
 
-self.onmessage = event => {
+// WASM init handler
+self.onmessage = ({data: [mod, mem]}) => {
     // Loading WASM is async!
-    let initialized = wasm_bindgen(...event.data).catch(err => {
+    let initialized = wasm_bindgen(mod, mem).catch(err => {
         // Propagate to main `onerror`
         setTimeout(() => {
             throw err;
@@ -14,16 +15,18 @@ self.onmessage = event => {
         throw err;
     });
 
-    let sat_worker = null;
 
     console.log("Worker ready");
+    // Initial setup handler
     // This updates the onmessage handler immediately,
     // and only waits for init within the handler
-    self.onmessage = async event => {
-        await initialized;
-        if (sat_worker === null) {
-            sat_worker = new SatWorker();
+    self.onmessage = ({data: [ptr]}) => {
+        // SAT worker data handler
+        self.onmessage = async ({data}) => {
+            await initialized;
+            let sat_worker = new SatWorker(ptr);
+
+            sat_worker.handle_worker_msg(...data);
         }
-        sat_worker.handle_worker_msg(...event.data);
     }
 };

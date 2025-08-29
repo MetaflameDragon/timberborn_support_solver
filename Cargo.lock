@@ -883,9 +883,6 @@ dependencies = [
 [[package]]
 name = "cpu-time"
 version = "1.0.0"
-dependencies = [
- "web-time",
-]
 
 [[package]]
 name = "crc32fast"

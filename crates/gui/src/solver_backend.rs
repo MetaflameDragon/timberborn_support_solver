@@ -100,6 +100,11 @@ impl SolverBackend {
         let session = SolverSession { encoding, limits, rx, interrupter: () };
 
         let worker = start_worker("./worker.js").expect("Failed to start worker");
+        let val = Box::new(42);
+        let val_ptr = Box::into_raw(val);
+        worker
+            .post_message(&js_sys::Array::of1(&JsValue::from(val_ptr as u32)))
+            .expect("Failed to post message");
 
         use wasm_bindgen::prelude::*;
 
@@ -142,7 +147,7 @@ impl SolverBackend {
 
 fn start_worker(path: &str) -> Result<Worker, JsValue> {
     let worker = Worker::new(path)?;
-    let msg_data = js_sys::Array::of1(&wasm_bindgen::module());
+    let msg_data = js_sys::Array::of2(&wasm_bindgen::module(), &wasm_bindgen::memory());
     worker.post_message(&msg_data)?;
     Ok(worker)
 }
@@ -307,9 +312,12 @@ pub struct SatWorker {
 #[wasm_bindgen]
 impl SatWorker {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Result<SatWorker, JsValue> {
+    pub fn new(ptr: u32) -> Result<SatWorker, JsValue> {
         console_error_panic_hook::set_once();
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
+        let val = unsafe { Box::from_raw(ptr as *mut i32) };
+        web_sys::console::log_1(&JsValue::from(format!("Got value: {val}")));
+        // js_sys::Atomics::load(&buffer, 0))));
         Ok(SatWorker { scope })
     }
 
