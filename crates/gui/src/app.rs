@@ -25,7 +25,9 @@ use timberborn_platform_cruncher::{
 
 use crate::{
     app::frame_history::FrameHistory,
-    solver_backend::{SolverBackend, SolverResponse, SolverSession},
+    solver_backend::{
+        SolverBackend, SolverResponse, SolverSession, batsat_wrapper::OnceLockInterrupter,
+    },
 };
 
 mod frame_history;
@@ -40,7 +42,7 @@ pub struct App {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
     backend: SolverBackend,
-    active_session: Option<SolverSession<()>>,
+    active_session: Option<SolverSession<OnceLockInterrupter>>,
     displayed_layout: Option<PlatformLayout>,
     layout_stats: PlatformLayoutStats,
     frame_history: FrameHistory,
@@ -149,9 +151,14 @@ impl App {
         let resp = SolverSession::try_recv(&mut self.active_session)?;
         match resp.assignment {
             Some(asgn) => {
-                let mut layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
+                let mut layout =
+                    PlatformLayout::from_assignment(&asgn, resp.session_data.encoding.vars());
                 layout.run_trivial_optimization(&self.make_world());
-                Some(SolverSessionResult::Sat { layout, limits: resp.limits, assignment: asgn })
+                Some(SolverSessionResult::Sat {
+                    layout,
+                    limits: resp.session_data.limits,
+                    assignment: asgn,
+                })
             }
             None => Some(SolverSessionResult::Unsat),
             // TODO: Solver interrupt & error responses?
@@ -164,8 +171,7 @@ impl App {
             world.grid(),
         );
 
-        // TODO
-        // self.active_session.take().map(|mut session| session.interrupt());
+        self.active_session.as_ref().map(|mut session| session.interrupt());
         self.active_session = self
             .backend
             .start(encoding, limits)
@@ -185,6 +191,7 @@ impl App {
 enum SolverSessionResult {
     Sat { layout: PlatformLayout, limits: PlatformLimits, assignment: Assignment },
     Unsat,
+    Interrupted,
 }
 
 impl eframe::App for App {
@@ -248,9 +255,7 @@ impl eframe::App for App {
                         self.layout_stats.clear();
                         self.start_solver(limits);
                     } else {
-                        // TODO
-                        // self.active_session.take().map(|mut session|
-                        // session.interrupt());
+                        self.active_session.as_ref().map(|mut session| session.interrupt());
                     }
                 }
 
@@ -315,8 +320,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // TODO
-        // self.active_session.take().map(|mut session| session.interrupt());
+        self.active_session.as_ref().map(|mut session| session.interrupt());
     }
 }
 

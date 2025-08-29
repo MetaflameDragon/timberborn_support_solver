@@ -1,6 +1,6 @@
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
-use batsat::callbacks::AsyncInterrupt;
+use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 use futures_channel::oneshot;
 use log::warn;
 use rustsat::{
@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use timberborn_platform_cruncher::encoder::{Encoding, PlatformLimits};
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
+
+use crate::solver_backend::batsat_wrapper::OnceLockInterrupter;
 
 pub struct SolverBackend {
     #[cfg(not(target_arch = "wasm32"))]
@@ -34,8 +36,7 @@ pub trait SolverTraitBounds {}
 impl<T> SolverTraitBounds for T {}
 
 pub struct SolverSession<I> {
-    encoding: Encoding,
-    limits: PlatformLimits,
+    session_data: SessionData,
     rx: oneshot::Receiver<Option<Assignment>>,
     interrupter: I,
 }
@@ -47,8 +48,9 @@ impl<I> SolverSession<I> {
         let session = maybe_self.as_mut()?;
         match session.rx.try_recv().transpose()? {
             Ok(assignment) => {
-                let SolverSession { encoding, limits, .. } = maybe_self.take().unwrap();
-                Some(SolverResponse { assignment, encoding, limits })
+                let SolverSession { session_data: SessionData { encoding, limits }, .. } =
+                    maybe_self.take().unwrap();
+                Some(SolverResponse { assignment, data: SessionData { encoding, limits } })
             }
             Err(_) => {
                 // Not running or already done
@@ -66,11 +68,16 @@ impl<I: InterruptSolver> SolverSession<I> {
     }
 }
 
-#[derive(Debug)]
-pub struct SolverResponse {
-    pub assignment: Option<Assignment>,
+#[derive(Debug, Clone)]
+pub struct SessionData {
     pub encoding: Encoding,
     pub limits: PlatformLimits,
+}
+
+#[derive(Debug, Clone)]
+pub struct SolverResponse {
+    pub assignment: Option<Assignment>,
+    pub data: SessionData,
 }
 
 impl SolverBackend {
@@ -91,43 +98,58 @@ impl SolverBackend {
         &mut self,
         encoding: Encoding,
         limits: PlatformLimits,
-    ) -> anyhow::Result<SolverSession<()>> {
+    ) -> anyhow::Result<SolverSession<OnceLockInterrupter>> {
         let instance = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
 
         let (tx, rx) = oneshot::channel();
 
-        let session = SolverSession { encoding, limits, rx, interrupter: () };
+        let session = SolverSession {
+            session_data: SessionData { encoding, limits },
+            rx,
+            interrupter: OnceLockInterrupter::default(),
+        };
 
         let worker = start_worker("./worker.js").expect("Failed to start worker");
-        let val = Box::new(42);
-        let val_ptr = Box::into_raw(val);
-        worker
-            .post_message(&js_sys::Array::of1(&JsValue::from(val_ptr as u32)))
-            .expect("Failed to post message");
 
         use wasm_bindgen::prelude::*;
 
         let onmessage = Closure::wrap(Box::new({
             let mut tx = Some(tx);
+            let interrupter_once_lock = session.interrupter.clone();
             move |msg: MessageEvent| {
                 let response: WorkerResponse = serde_wasm_bindgen::from_value(msg.data())
                     .expect("Failed to deserialize WorkerResponse");
                 web_sys::console::log_1(&format!("Got response: {response:?}").into());
-                match tx.take() {
-                    None => {
-                        web_sys::console::warn_1(
-                            &"Attempted to use SAT worker oneshot tx twice".into(),
-                        );
+                let tx_msg = match response {
+                    WorkerResponse::InterruptHandle { ptr } => {
+                        // SAFETY: This got sent from the worker, and should be fully
+                        // owned by SolverBackend
+                        let handle = unsafe { Box::from_raw(ptr as *mut AsyncInterruptHandle) };
+                        web_sys::console::trace_1(&"Setting interrupter".into());
+                        if interrupter_once_lock.set(handle).is_err() {
+                            web_sys::console::error_1(
+                                &"Tried to init interrupter OnceLock twice!".into(),
+                            )
+                        }
+                        None
                     }
-                    Some(tx) => {
-                        // Ignore error
-                        _ = match response {
-                            WorkerResponse::Assignment(asgn) => tx.send(Some(asgn)),
+                    WorkerResponse::Assignment(asgn) => Some(Some(asgn)),
+                    WorkerResponse::Unsat => Some(None),
+                    WorkerResponse::Interrupted => Some(None),
+                };
 
-                            WorkerResponse::Unsat => tx.send(None),
-                            WorkerResponse::Interrupted => tx.send(None),
-                        };
+                if let Some(msg) = tx_msg {
+                    match tx.take() {
+                        None => {
+                            web_sys::console::warn_1(
+                                &"Attempted to use SAT worker oneshot tx twice".into(),
+                            );
+                        }
+                        Some(tx) => {
+                            // Ignore error
+                            _ = tx.send(msg);
+                        }
                     }
                 }
             }
@@ -154,9 +176,42 @@ fn start_worker(path: &str) -> Result<Worker, JsValue> {
 
 #[cfg(target_arch = "wasm32")]
 pub mod batsat_wrapper {
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, OnceLock},
+        time::Duration,
+    };
 
     use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
+
+    #[derive(Default)]
+    pub struct OnceLockInterrupter(Arc<OnceLock<Box<AsyncInterruptHandle>>>);
+
+    impl OnceLockInterrupter {
+        pub fn set(
+            &self,
+            value: Box<AsyncInterruptHandle>,
+        ) -> Result<(), Box<AsyncInterruptHandle>> {
+            self.0.set(value)
+        }
+    }
+
+    impl Clone for OnceLockInterrupter {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    impl InterruptSolver for OnceLockInterrupter {
+        fn interrupt(&self) {
+            web_sys::console::trace_1(&"Trying to interrupt...".into());
+            if let Some(handle) = self.0.get() {
+                handle.interrupt_async();
+                web_sys::console::info_1(&"Interrupting solver".into());
+            } else {
+                web_sys::console::trace_1(&"Failed to interrupt: interrrupter not set".into());
+            }
+        }
+    }
 
     #[derive(Debug, Default)]
     pub struct BatsatWrapper(rustsat_batsat::Solver<AsyncInterrupt>);
@@ -299,6 +354,7 @@ enum WorkerMessage {
 #[derive(Clone, Debug)]
 #[derive(Serialize, Deserialize)]
 enum WorkerResponse {
+    InterruptHandle { ptr: u32 },
     Assignment(Assignment),
     Unsat,
     Interrupted,
@@ -312,12 +368,9 @@ pub struct SatWorker {
 #[wasm_bindgen]
 impl SatWorker {
     #[wasm_bindgen(constructor)]
-    pub fn new(ptr: u32) -> Result<SatWorker, JsValue> {
+    pub fn new() -> Result<SatWorker, JsValue> {
         console_error_panic_hook::set_once();
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
-        let val = unsafe { Box::from_raw(ptr as *mut i32) };
-        web_sys::console::log_1(&JsValue::from(format!("Got value: {val}")));
-        // js_sys::Atomics::load(&buffer, 0))));
         Ok(SatWorker { scope })
     }
 
@@ -344,6 +397,14 @@ impl SatWorker {
         web_sys::console::log_1(&JsValue::from(format!("Got CNF: {} clauses", cnf.len())));
         let mut solver = rustsat_batsat::Solver::<AsyncInterrupt>::default();
         solver.add_cnf(cnf).expect("Failed to add CNF");
+        let handle = Box::new(solver.batsat_ref().cb().get_handle());
+        let handle_ptr = Box::into_raw(handle);
+        if let Err(err) = self.respond(&WorkerResponse::InterruptHandle { ptr: handle_ptr as u32 })
+        {
+            drop(unsafe { Box::from_raw(handle_ptr) });
+            panic!("Failed to send interrupter: {err:?}")
+        }
+
         web_sys::console::log_1(&JsValue::from("Running solver"));
         let res = match solver.solve() {
             Ok(res) => res,
@@ -357,24 +418,23 @@ impl SatWorker {
             SolverResult::Sat => {
                 web_sys::console::log_1(&JsValue::from("SAT"));
                 let asgn = solver.full_solution().expect("Error while getting solution");
-                self.respond(&WorkerResponse::Assignment(asgn));
+                self.respond(&WorkerResponse::Assignment(asgn))
             }
             SolverResult::Unsat => {
                 web_sys::console::log_1(&JsValue::from("UNSAT"));
-                self.respond(&WorkerResponse::Unsat);
+                self.respond(&WorkerResponse::Unsat)
             }
             SolverResult::Interrupted => {
                 web_sys::console::log_1(&JsValue::from("Interrupted"));
-                self.respond(&WorkerResponse::Interrupted);
+                self.respond(&WorkerResponse::Interrupted)
             }
         }
+        .expect("Error sending response");
     }
 
-    fn respond(&self, response: &WorkerResponse) {
-        self.scope
-            .post_message(
-                &serde_wasm_bindgen::to_value(response).expect("Error serializing response"),
-            )
-            .expect("Error sending response message");
+    fn respond(&self, response: &WorkerResponse) -> Result<(), JsValue> {
+        self.scope.post_message(
+            &serde_wasm_bindgen::to_value(response).expect("Error serializing response"),
+        )
     }
 }

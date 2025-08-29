@@ -17,16 +17,18 @@ self.onmessage = ({data: [mod, mem]}) => {
 
 
     console.log("Worker ready");
-    // Initial setup handler
+    // SAT worker data handler
     // This updates the onmessage handler immediately,
     // and only waits for init within the handler
-    self.onmessage = ({data: [ptr]}) => {
-        // SAT worker data handler
-        self.onmessage = async ({data}) => {
-            await initialized;
-            let sat_worker = new SatWorker(ptr);
-
-            sat_worker.handle_worker_msg(...data);
+    let sat_worker = null;
+    self.onmessage = async ({data}) => {
+        await initialized;
+        if (sat_worker === null) {
+            console.log("Initializing SatWorker");
+            sat_worker = new SatWorker();
         }
+
+        await sat_worker.handle_worker_msg(...data);
     }
+
 };
