@@ -254,13 +254,15 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("bottom panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let is_running = self.active_session.is_some();
+                let is_aborted = self.active_session.as_ref().is_some_and(|s| s.was_interrupted());
+
                 let button_text = if !is_running {
                     RichText::new("Solve").color(Color32::GREEN)
                 } else {
                     RichText::new("Abort").color(Color32::RED)
                 }
                 .size(24f32);
-                let solve_btn_resp = Button::new(button_text).ui(ui);
+                let solve_btn_resp = ui.add_enabled(!is_aborted, Button::new(button_text));
 
                 if solve_btn_resp.clicked() {
                     if !is_running {
