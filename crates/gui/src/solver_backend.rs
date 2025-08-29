@@ -37,20 +37,19 @@ impl<T> SolverTraitBounds for T {}
 
 pub struct SolverSession<I> {
     session_data: SessionData,
-    rx: oneshot::Receiver<Option<Assignment>>,
+    rx: oneshot::Receiver<SolverResponse>,
     interrupter: I,
 }
 
 impl<I> SolverSession<I> {
-    pub fn try_recv(maybe_self: &mut Option<Self>) -> Option<SolverResponse> {
+    pub fn try_recv(maybe_self: &mut Option<Self>) -> Option<SessionResult> {
         // Both empty and closed is okay
         // Closed also implies the value has already been received
         let session = maybe_self.as_mut()?;
         match session.rx.try_recv().transpose()? {
-            Ok(assignment) => {
-                let SolverSession { session_data: SessionData { encoding, limits }, .. } =
-                    maybe_self.take().unwrap();
-                Some(SolverResponse { assignment, data: SessionData { encoding, limits } })
+            Ok(solver_response) => {
+                let SolverSession { session_data, .. } = maybe_self.take().unwrap();
+                Some(SessionResult { solver_response, session_data })
             }
             Err(_) => {
                 // Not running or already done
@@ -63,7 +62,7 @@ impl<I> SolverSession<I> {
 }
 
 impl<I: InterruptSolver> SolverSession<I> {
-    pub fn interrupt(&mut self) {
+    pub fn interrupt(&self) {
         self.interrupter.interrupt();
     }
 }
@@ -73,11 +72,17 @@ pub struct SessionData {
     pub encoding: Encoding,
     pub limits: PlatformLimits,
 }
+#[derive(Debug, Clone)]
+pub enum SolverResponse {
+    Sat(Assignment),
+    Unsat,
+    Interrupted,
+}
 
 #[derive(Debug, Clone)]
-pub struct SolverResponse {
-    pub assignment: Option<Assignment>,
-    pub data: SessionData,
+pub struct SessionResult {
+    pub solver_response: SolverResponse,
+    pub session_data: SessionData,
 }
 
 impl SolverBackend {
@@ -134,9 +139,9 @@ impl SolverBackend {
                         }
                         None
                     }
-                    WorkerResponse::Assignment(asgn) => Some(Some(asgn)),
-                    WorkerResponse::Unsat => Some(None),
-                    WorkerResponse::Interrupted => Some(None),
+                    WorkerResponse::Assignment(asgn) => Some(SolverResponse::Sat(asgn)),
+                    WorkerResponse::Unsat => Some(SolverResponse::Unsat),
+                    WorkerResponse::Interrupted => Some(SolverResponse::Interrupted),
                 };
 
                 if let Some(msg) = tx_msg {

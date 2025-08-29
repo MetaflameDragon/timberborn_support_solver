@@ -26,7 +26,8 @@ use timberborn_platform_cruncher::{
 use crate::{
     app::frame_history::FrameHistory,
     solver_backend::{
-        SolverBackend, SolverResponse, SolverSession, batsat_wrapper::OnceLockInterrupter,
+        SessionResult, SolverBackend, SolverResponse, SolverSession,
+        batsat_wrapper::OnceLockInterrupter,
     },
 };
 
@@ -148,20 +149,21 @@ impl App {
     }
 
     fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult> {
-        let resp = SolverSession::try_recv(&mut self.active_session)?;
-        match resp.assignment {
-            Some(asgn) => {
+        let SessionResult { solver_response, session_data } =
+            SolverSession::try_recv(&mut self.active_session)?;
+        match solver_response {
+            SolverResponse::Sat(asgn) => {
                 let mut layout =
-                    PlatformLayout::from_assignment(&asgn, resp.session_data.encoding.vars());
+                    PlatformLayout::from_assignment(&asgn, session_data.encoding.vars());
                 layout.run_trivial_optimization(&self.make_world());
                 Some(SolverSessionResult::Sat {
                     layout,
-                    limits: resp.session_data.limits,
+                    limits: session_data.limits,
                     assignment: asgn,
                 })
             }
-            None => Some(SolverSessionResult::Unsat),
-            // TODO: Solver interrupt & error responses?
+            SolverResponse::Unsat => Some(SolverSessionResult::Unsat),
+            SolverResponse::Interrupted => Some(SolverSessionResult::Interrupted),
         }
     }
     fn start_solver(&mut self, limits: PlatformLimits) {
@@ -227,6 +229,11 @@ impl eframe::App for App {
                 }
 
                 self.displayed_layout = Some(layout);
+            }
+
+            Some(SolverSessionResult::Interrupted) => {
+                web_sys::console::log_1(&"Got response: session interrupted.".into());
+                self.active_session = None;
             }
         };
 
