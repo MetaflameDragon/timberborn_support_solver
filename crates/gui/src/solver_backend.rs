@@ -1,4 +1,7 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    sync::{OnceLock, atomic, atomic::AtomicBool},
+    time::Duration,
+};
 
 use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 use futures_channel::oneshot;
@@ -39,6 +42,7 @@ pub struct SolverSession<I> {
     session_data: SessionData,
     rx: oneshot::Receiver<SolverResponse>,
     interrupter: I,
+    was_interrupted: AtomicBool,
 }
 
 impl<I> SolverSession<I> {
@@ -48,8 +52,10 @@ impl<I> SolverSession<I> {
         let session = maybe_self.as_mut()?;
         match session.rx.try_recv().transpose()? {
             Ok(solver_response) => {
-                let SolverSession { session_data, .. } = maybe_self.take().unwrap();
-                Some(SessionResult { solver_response, session_data })
+                let session = maybe_self.take().unwrap();
+                let was_interrupted = session.was_interrupted();
+                let SolverSession { session_data, .. } = session;
+                Some(SessionResult { solver_response, session_data, was_interrupted })
             }
             Err(_) => {
                 // Not running or already done
@@ -59,10 +65,15 @@ impl<I> SolverSession<I> {
             }
         }
     }
+
+    pub fn was_interrupted(&self) -> bool {
+        self.was_interrupted.load(atomic::Ordering::SeqCst)
+    }
 }
 
 impl<I: InterruptSolver> SolverSession<I> {
     pub fn interrupt(&self) {
+        self.was_interrupted.store(true, atomic::Ordering::SeqCst);
         self.interrupter.interrupt();
     }
 }
@@ -83,6 +94,7 @@ pub enum SolverResponse {
 pub struct SessionResult {
     pub solver_response: SolverResponse,
     pub session_data: SessionData,
+    pub was_interrupted: bool,
 }
 
 impl SolverBackend {
@@ -113,6 +125,7 @@ impl SolverBackend {
             session_data: SessionData { encoding, limits },
             rx,
             interrupter: OnceLockInterrupter::default(),
+            was_interrupted: AtomicBool::new(false),
         };
 
         let worker = start_worker("./worker.js").expect("Failed to start worker");
@@ -182,38 +195,49 @@ fn start_worker(path: &str) -> Result<Worker, JsValue> {
 #[cfg(target_arch = "wasm32")]
 pub mod batsat_wrapper {
     use std::{
-        sync::{Arc, OnceLock},
+        sync::{Arc, OnceLock, atomic, atomic::AtomicBool},
         time::Duration,
     };
 
     use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 
     #[derive(Default)]
-    pub struct OnceLockInterrupter(Arc<OnceLock<Box<AsyncInterruptHandle>>>);
+    pub struct OnceLockInterrupter {
+        handle: Arc<OnceLock<Box<AsyncInterruptHandle>>>,
+        triggered: AtomicBool,
+    }
 
     impl OnceLockInterrupter {
         pub fn set(
             &self,
             value: Box<AsyncInterruptHandle>,
         ) -> Result<(), Box<AsyncInterruptHandle>> {
-            self.0.set(value)
+            self.handle.set(value)?;
+
+            // If already triggered, interrupt immediately
+            if self.triggered.load(atomic::Ordering::Relaxed) {
+                web_sys::console::trace_1(&"Interrupting late".into());
+                self.handle.get().unwrap().interrupt_async();
+            }
+            Ok(())
         }
     }
 
     impl Clone for OnceLockInterrupter {
         fn clone(&self) -> Self {
-            Self(Arc::clone(&self.0))
+            Self { handle: Arc::clone(&self.handle), triggered: AtomicBool::new(false) }
         }
     }
 
     impl InterruptSolver for OnceLockInterrupter {
         fn interrupt(&self) {
-            web_sys::console::trace_1(&"Trying to interrupt...".into());
-            if let Some(handle) = self.0.get() {
+            web_sys::console::trace_1(&"Interrupting solver".into());
+            self.triggered.store(true, atomic::Ordering::SeqCst);
+
+            if let Some(handle) = self.handle.get() {
                 handle.interrupt_async();
-                web_sys::console::info_1(&"Interrupting solver".into());
             } else {
-                web_sys::console::trace_1(&"Failed to interrupt: interrrupter not set".into());
+                web_sys::console::trace_1(&"Interrupter not set, will be interrupted ".into());
             }
         }
     }

@@ -8,7 +8,7 @@ use egui::{
     Sense, Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, Widget, pos2, util::History, vec2,
 };
 use itertools::Itertools;
-use log::{error, info};
+use log::{error, info, trace};
 use platform_type_selector::PlatformTypeSelector;
 use rustsat::{
     solvers::{Interrupt, Solve, SolveStats, SolverResult},
@@ -149,7 +149,7 @@ impl App {
     }
 
     fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult> {
-        let SessionResult { solver_response, session_data } =
+        let SessionResult { solver_response, session_data, was_interrupted } =
             SolverSession::try_recv(&mut self.active_session)?;
         match solver_response {
             SolverResponse::Sat(asgn) => {
@@ -160,6 +160,7 @@ impl App {
                     layout,
                     limits: session_data.limits,
                     assignment: asgn,
+                    was_interrupted,
                 })
             }
             SolverResponse::Unsat => Some(SolverSessionResult::Unsat),
@@ -191,7 +192,12 @@ impl App {
 
 #[derive(Debug)]
 enum SolverSessionResult {
-    Sat { layout: PlatformLayout, limits: PlatformLimits, assignment: Assignment },
+    Sat {
+        layout: PlatformLayout,
+        limits: PlatformLimits,
+        assignment: Assignment,
+        was_interrupted: bool,
+    },
     Unsat,
     Interrupted,
 }
@@ -205,7 +211,7 @@ impl eframe::App for App {
             Some(SolverSessionResult::Unsat) => {
                 info!("Unsat");
             }
-            Some(SolverSessionResult::Sat { layout, mut limits, .. }) => {
+            Some(SolverSessionResult::Sat { layout, mut limits, was_interrupted, .. }) => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
                 // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
@@ -216,19 +222,23 @@ impl eframe::App for App {
                 //     self.start_solver(limits);
                 // }
 
-                let weight = layout.total_weight(&limits.weights);
+                // If the session was interrupted, discard the result
+                if was_interrupted {
+                    info!("Session finished, but it was interrupted - aborting");
+                } else {
+                    let weight = layout.total_weight(&limits.weights);
 
-                info!("Got a solution with weight {weight}");
-                self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
+                    info!("Got a solution with weight {weight}");
+                    self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
+                    self.displayed_layout = Some(layout);
 
-                if let Some(weight_subtracted) = weight.checked_sub(1)
-                    && weight_subtracted > 0
-                {
-                    limits.weight_limit = Some(weight_subtracted);
-                    self.start_solver(limits);
+                    if let Some(weight_subtracted) = weight.checked_sub(1)
+                        && weight_subtracted > 0
+                    {
+                        limits.weight_limit = Some(weight_subtracted);
+                        self.start_solver(limits);
+                    }
                 }
-
-                self.displayed_layout = Some(layout);
             }
 
             Some(SolverSessionResult::Interrupted) => {
