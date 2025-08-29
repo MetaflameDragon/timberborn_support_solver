@@ -24,7 +24,7 @@ use timberborn_platform_cruncher::{
 };
 
 use crate::{
-    app::frame_history::FrameHistory,
+    app::{frame_history::FrameHistory, solver_controls::SolverControlsResponse},
     solver_backend::{
         SessionResult, SolverBackend, SolverResponse, SolverSession,
         batsat_wrapper::OnceLockInterrupter,
@@ -167,6 +167,7 @@ impl App {
             SolverResponse::Interrupted => Some(SolverSessionResult::Interrupted),
         }
     }
+
     fn start_solver(&mut self, limits: PlatformLimits) {
         let world = self.make_world();
         let encoding = Encoding::encode(
@@ -174,7 +175,7 @@ impl App {
             world.grid(),
         );
 
-        self.active_session.as_ref().map(|mut session| session.interrupt());
+        self.active_session.as_ref().map(|session| session.interrupt());
         self.active_session = self
             .backend
             .start(encoding, limits)
@@ -188,30 +189,13 @@ impl App {
         let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
         World::new(world_grid)
     }
-}
 
-#[derive(Debug)]
-enum SolverSessionResult {
-    Sat {
-        layout: PlatformLayout,
-        limits: PlatformLimits,
-        assignment: Assignment,
-        was_interrupted: bool,
-    },
-    Unsat,
-    Interrupted,
-}
-
-impl eframe::App for App {
-    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
-        self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
-
-        match self.try_get_current_session_results() {
-            None => {}
-            Some(SolverSessionResult::Unsat) => {
+    fn process_active_session(&mut self, ctx: &Context) -> Option<()> {
+        match self.try_get_current_session_results()? {
+            SolverSessionResult::Unsat => {
                 info!("Unsat");
             }
-            Some(SolverSessionResult::Sat { layout, mut limits, was_interrupted, .. }) => {
+            SolverSessionResult::Sat { layout, mut limits, was_interrupted, .. } => {
                 // info!("Sat\n{layout:#?}");
                 info!("Sat");
                 // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
@@ -241,58 +225,53 @@ impl eframe::App for App {
                 }
             }
 
-            Some(SolverSessionResult::Interrupted) => {
+            SolverSessionResult::Interrupted => {
                 web_sys::console::log_1(&"Got response: session interrupted.".into());
                 self.active_session = None;
             }
         };
+
+        Some(())
+    }
+}
+
+#[derive(Debug)]
+enum SolverSessionResult {
+    Sat {
+        layout: PlatformLayout,
+        limits: PlatformLimits,
+        assignment: Assignment,
+        was_interrupted: bool,
+    },
+    Unsat,
+    Interrupted,
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
+        self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
+
+        self.process_active_session(ctx);
 
         egui::SidePanel::left("left panel").show(ctx, |ui| {
             self.platform_type_selector.ui(ui);
         });
 
         egui::TopBottomPanel::bottom("bottom panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let is_running = self.active_session.is_some();
-                let is_aborted = self.active_session.as_ref().is_some_and(|s| s.was_interrupted());
-
-                let button_text = if !is_running {
-                    RichText::new("Solve").color(Color32::GREEN)
-                } else {
-                    RichText::new("Abort").color(Color32::RED)
+            let session_state = SessionState::from_session(self.active_session.as_ref());
+            solver_controls::draw(ui, session_state, &self.layout_stats).map(|resp| match resp {
+                SolverControlsResponse::StartSession => {
+                    let platform_defs = self.platform_type_selector.active_platform_defs();
+                    let limits = PlatformLimits::new_with_weights(
+                        Default::default(),
+                        platform_defs.collect(),
+                        None,
+                    );
+                    self.layout_stats.clear();
+                    self.start_solver(limits);
                 }
-                .size(24f32);
-                let solve_btn_resp = ui.add_enabled(!is_aborted, Button::new(button_text));
-
-                if solve_btn_resp.clicked() {
-                    if !is_running {
-                        let limits = PlatformLimits::new_with_weights(
-                            Default::default(),
-                            self.platform_type_selector.active_platform_defs().collect(),
-                            None,
-                        );
-                        self.layout_stats.clear();
-                        self.start_solver(limits);
-                    } else {
-                        self.active_session.as_ref().map(|mut session| session.interrupt());
-                    }
-                }
-
-                if is_running {
-                    ui.spinner();
-                }
-
-                if let Some(weight) = self.layout_stats.weight.latest() {
-                    ui.horizontal_wrapped(|ui| {
-                        // From https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/misc_demo_window.rs#L211
-                        // Trick so we don't have to add spaces in the text below:
-                        let width =
-                            ui.fonts(|f| f.glyph_width(&TextStyle::Body.resolve(ui.style()), ' '));
-                        ui.spacing_mut().item_spacing.x = width;
-
-                        ui.label("Solution weight: ");
-                        ui.colored_label(Color32::GREEN, format!("{weight}"));
-                    });
+                SolverControlsResponse::AbortSession => {
+                    self.active_session.as_ref().map(|session| session.interrupt());
                 }
             });
         });
@@ -347,6 +326,85 @@ fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
     let (a, b) = input.trim().split_once('x')?;
     let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
     (a > 0 && b > 0).then_some(PlatformDef::new(Dimensions::new(a, b)))
+}
+
+#[derive(Copy, Clone, Debug)]
+enum SessionState {
+    Idle,
+    Running,
+    Aborted,
+}
+
+impl SessionState {
+    pub fn from_session<T>(session: Option<&SolverSession<T>>) -> SessionState {
+        match session {
+            None => SessionState::Idle,
+            Some(session) => {
+                if session.was_interrupted() {
+                    SessionState::Aborted
+                } else {
+                    SessionState::Running
+                }
+            }
+        }
+    }
+}
+
+pub mod solver_controls {
+    use eframe::epaint::Color32;
+    use egui::{Button, RichText, TextStyle, Ui};
+
+    use crate::app::{PlatformLayoutStats, SessionState};
+
+    #[derive(Copy, Clone, Debug)]
+    pub enum SolverControlsResponse {
+        StartSession,
+        AbortSession,
+    }
+
+    pub fn draw(
+        ui: &mut Ui,
+        session_state: SessionState,
+        layout_stats: &PlatformLayoutStats,
+    ) -> Option<SolverControlsResponse> {
+        ui.horizontal(|ui| {
+            let is_running = matches!(session_state, SessionState::Running);
+            let is_aborted = matches!(session_state, SessionState::Aborted);
+
+            let button_text = if !is_running {
+                RichText::new("Solve").color(Color32::GREEN)
+            } else {
+                RichText::new("Abort").color(Color32::RED)
+            }
+            .size(24f32);
+            let solve_btn_resp = ui.add_enabled(!is_aborted, Button::new(button_text));
+
+            let response = solve_btn_resp.clicked().then_some(if is_running {
+                SolverControlsResponse::AbortSession
+            } else {
+                SolverControlsResponse::StartSession
+            });
+
+            if is_running {
+                ui.spinner();
+            }
+
+            if let Some(weight) = layout_stats.weight.latest() {
+                ui.horizontal_wrapped(|ui| {
+                    // From https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/misc_demo_window.rs#L211
+                    // Trick so we don't have to add spaces in the text below:
+                    let width =
+                        ui.fonts(|f| f.glyph_width(&TextStyle::Body.resolve(ui.style()), ' '));
+                    ui.spacing_mut().item_spacing.x = width;
+
+                    ui.label("Solution weight: ");
+                    ui.colored_label(Color32::GREEN, format!("{weight}"));
+                });
+            }
+            response
+        })
+        .inner
+    }
 }
 
 #[derive(Clone, Default, Debug)]
