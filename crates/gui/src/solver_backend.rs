@@ -230,12 +230,10 @@ pub mod problem {
 
 #[cfg(target_arch = "wasm32")]
 pub mod batsat_wrapper {
-    use std::{
-        sync::{Arc, OnceLock, atomic, atomic::AtomicBool},
-        time::Duration,
-    };
+    use std::sync::{Arc, OnceLock, atomic, atomic::AtomicBool};
 
-    use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
+    use batsat::callbacks::AsyncInterruptHandle;
+    use rustsat::solvers::InterruptSolver;
 
     #[derive(Default)]
     pub struct OnceLockInterrupter {
@@ -275,136 +273,6 @@ pub mod batsat_wrapper {
             } else {
                 web_sys::console::trace_1(&"Interrupter not set, will be interrupted ".into());
             }
-        }
-    }
-
-    #[derive(Debug, Default)]
-    pub struct BatsatWrapper(rustsat_batsat::Solver<AsyncInterrupt>);
-
-    impl BatsatWrapper {
-        pub fn batsat_ref(&self) -> &rustsat_batsat::Solver<AsyncInterrupt> {
-            &self.0
-        }
-        pub fn batsat_mut(&mut self) -> &mut rustsat_batsat::Solver<AsyncInterrupt> {
-            &mut self.0
-        }
-    }
-
-    use rustsat::{
-        solvers::{
-            Interrupt, InterruptSolver, Solve, SolveIncremental, SolveStats, SolverResult,
-            SolverStats,
-        },
-        types::{Cl, Clause, Lit, TernaryVal, Var},
-    };
-
-    pub struct InterruptHandleWrapper(AsyncInterruptHandle);
-
-    impl InterruptSolver for InterruptHandleWrapper {
-        fn interrupt(&self) {
-            self.0.interrupt_async()
-        }
-    }
-
-    impl Interrupt for BatsatWrapper {
-        type Interrupter = InterruptHandleWrapper;
-
-        fn interrupter(&mut self) -> Self::Interrupter {
-            InterruptHandleWrapper(self.0.batsat_ref().cb().get_handle())
-        }
-    }
-
-    // Trait forwards for Batsat
-
-    impl Extend<Clause> for BatsatWrapper {
-        fn extend<T: IntoIterator<Item = Clause>>(&mut self, iter: T) {
-            self.0.extend(iter);
-        }
-    }
-
-    impl<'a, C> Extend<&'a C> for BatsatWrapper
-    where
-        C: AsRef<Cl> + ?Sized,
-    {
-        fn extend<T: IntoIterator<Item = &'a C>>(&mut self, iter: T) {
-            self.0.extend(iter);
-        }
-    }
-
-    impl Solve for BatsatWrapper {
-        fn signature(&self) -> &'static str {
-            self.0.signature()
-        }
-
-        fn reserve(&mut self, max_var: Var) -> anyhow::Result<()> {
-            self.0.reserve(max_var)
-        }
-
-        fn solve(&mut self) -> anyhow::Result<SolverResult> {
-            self.0.solve()
-        }
-
-        fn lit_val(&self, lit: Lit) -> anyhow::Result<TernaryVal> {
-            self.0.lit_val(lit)
-        }
-
-        fn add_clause_ref<C>(&mut self, clause: &C) -> anyhow::Result<()>
-        where
-            C: AsRef<Cl> + ?Sized,
-        {
-            self.0.add_clause_ref(clause)
-        }
-    }
-
-    impl SolveIncremental for BatsatWrapper {
-        fn solve_assumps(&mut self, assumps: &[Lit]) -> anyhow::Result<SolverResult> {
-            self.0.solve_assumps(assumps)
-        }
-
-        fn core(&mut self) -> anyhow::Result<Vec<Lit>> {
-            self.0.core()
-        }
-    }
-
-    impl SolveStats for BatsatWrapper {
-        fn stats(&self) -> SolverStats {
-            self.0.stats()
-        }
-
-        fn n_sat_solves(&self) -> usize {
-            self.0.n_sat_solves()
-        }
-
-        fn n_unsat_solves(&self) -> usize {
-            self.0.n_unsat_solves()
-        }
-
-        fn n_terminated(&self) -> usize {
-            self.0.n_terminated()
-        }
-
-        fn n_solves(&self) -> usize {
-            self.0.n_solves()
-        }
-
-        fn n_clauses(&self) -> usize {
-            self.0.n_clauses()
-        }
-
-        fn max_var(&self) -> Option<Var> {
-            self.0.max_var()
-        }
-
-        fn n_vars(&self) -> usize {
-            self.0.n_vars()
-        }
-
-        fn avg_clause_len(&self) -> f32 {
-            self.0.avg_clause_len()
-        }
-
-        fn cpu_solve_time(&self) -> Duration {
-            self.0.cpu_solve_time()
         }
     }
 }

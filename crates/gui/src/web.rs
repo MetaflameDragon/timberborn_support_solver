@@ -4,10 +4,7 @@ use batsat::callbacks::AsyncInterrupt;
 use eframe::wasm_bindgen::{self, prelude::*};
 use rustsat_batsat;
 
-use crate::{
-    App,
-    solver_backend::{SolverBackend, batsat_wrapper::BatsatWrapper},
-};
+use crate::{App, solver_backend::SolverBackend};
 
 /// Our handle to the web app from JavaScript.
 #[derive(Clone)]
