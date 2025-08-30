@@ -15,6 +15,8 @@ web_app = []
 glow = ["eframe/glow"]
 wgpu = ["eframe/wgpu", "bytemuck", "dep:wgpu"]
 
+
+
 [dependencies]
 timberborn-platform-cruncher = { path = "../../." }
 egui = "0.32.1"

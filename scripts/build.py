@@ -66,6 +66,11 @@ subprocess.run(
         "web_app",
 
         "-Zbuild-std=std,panic_abort",
+
+        # Temporary patch for rustsat depending on cpu-time, which doesn't work on WASM
+        # Note: currently reports that the patch was not applied when -Zbuild-std is active
+        "--config",
+        'patch.crates-io.cpu-time.path = "patches/cpu-time-patch"'
     ],
     cwd=project_dir,
 ).check_returncode()
