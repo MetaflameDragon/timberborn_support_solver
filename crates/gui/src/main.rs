@@ -1,4 +1,5 @@
 use rustsat::solvers::{Interrupt, InterruptSolver, Solve};
+#[cfg(not(target_arch = "wasm32"))]
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 
 use crate::solver_backend::SolverBackend;
