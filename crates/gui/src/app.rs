@@ -16,16 +16,14 @@ use timberborn_platform_cruncher::{
     world::{World, WorldGrid},
 };
 
-#[cfg(target_arch = "wasm32")]
-use crate::wasm_solver_backend::{OnceLockInterrupter, WasmSolverBackend};
 use crate::{
     app::{
         frame_history::FrameHistory, platform_type_selector::PlatformTypeSelector,
         solver_controls::SolverControlsResponse,
     },
     solver_backend::{
-        SolverBackend, SolverBackendResponse, SolverResponse,
-        problem::{Problem, SessionData, Solution, StaticData},
+        SolverBackend, SolverBackendResponse,
+        problem::{Problem, SessionData, StaticData},
     },
 };
 
@@ -37,10 +35,10 @@ struct TerrainTile {
     terrain: bool,
 }
 
-pub struct App {
+pub struct App<Backend: SolverBackend> {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
-    backend: WasmSolverBackend,
+    backend: Backend,
     displayed_layout: Option<PlatformLayout>,
     layout_stats: PlatformLayoutStats,
     frame_history: FrameHistory,
@@ -58,10 +56,9 @@ const DEFAULT_PLATFORMS: [(PlatformDef, isize); 8] = [
     (platform_def!(5, 5), 4),
 ];
 
-impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: WasmSolverBackend) -> Self {
+impl<Backend: SolverBackend> App<Backend> {
+    pub fn new(_cc: &eframe::CreationContext<'_>, backend: Backend) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
-        backend.set_egui_ctx(cc.egui_ctx.clone());
 
         App {
             terrain_grid,
@@ -148,16 +145,19 @@ impl App {
         self.backend.try_recv()?.map_err(|err| error!("{:?}", err)).ok()
     }
 
-    fn start_solver(&mut self, limits: PlatformLimits) {
+    fn start_solver(&mut self, ctx: Context, limits: PlatformLimits) {
         let world = self.make_world();
         let platform_defs =
             self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect();
 
         self.backend
-            .start(Problem {
-                static_data: StaticData { world, platform_defs },
-                session_data: SessionData { limits },
-            })
+            .start(
+                Problem {
+                    static_data: StaticData { world, platform_defs },
+                    session_data: SessionData { limits },
+                },
+                Some(Box::new(move || ctx.request_repaint())),
+            )
             .map_err(|err| {
                 error!("Failed to start solver: {err}");
             })
@@ -186,7 +186,7 @@ impl App {
                 && weight_subtracted > 0
             {
                 limits.weight_limit = Some(weight_subtracted);
-                self.start_solver(limits);
+                self.start_solver(ctx.clone(), limits);
             }
         } else {
             info!("Unsat");
@@ -196,14 +196,7 @@ impl App {
     }
 }
 
-#[derive(Debug)]
-enum SolverSessionResult {
-    Sat { limits: PlatformLimits, solution: Solution, was_interrupted: bool },
-    Unsat,
-    Interrupted,
-}
-
-impl eframe::App for App {
+impl<Backend: SolverBackend> eframe::App for App<Backend> {
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
         self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
 
@@ -224,7 +217,7 @@ impl eframe::App for App {
                         None,
                     );
                     self.layout_stats.clear();
-                    self.start_solver(limits);
+                    self.start_solver(ctx.clone(), limits);
                 }
                 SolverControlsResponse::AbortSession => {
                     self.backend.interrupt();

@@ -96,7 +96,11 @@ impl WasmSolverBackend {
 }
 
 impl SolverBackend for WasmSolverBackend {
-    fn start(&mut self, problem: Problem) -> Result<(), anyhow::Error> {
+    fn start(
+        &mut self,
+        problem: Problem,
+        mut callback: Option<Box<dyn FnMut() + Send>>,
+    ) -> Result<(), anyhow::Error> {
         let (tx, rx) = oneshot::channel();
 
         let session = SolverSession {
@@ -145,6 +149,9 @@ impl SolverBackend for WasmSolverBackend {
                         Some(tx) => {
                             // Ignore error
                             _ = tx.send(msg);
+                            if let Some(callback) = callback.as_mut() {
+                                callback();
+                            }
                         }
                     }
                 }

@@ -53,7 +53,7 @@ impl WebHandle {
     /// Example on how to call into your app from JavaScript.
     #[wasm_bindgen]
     pub fn example(&self) {
-        if let Some(_app) = self.runner.app_mut::<App>() {
+        if let Some(_app) = self.runner.app_mut::<App<WasmSolverBackend>>() {
             // _app.example();
         }
     }

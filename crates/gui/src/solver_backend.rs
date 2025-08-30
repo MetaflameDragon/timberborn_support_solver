@@ -1,4 +1,3 @@
-use rustsat::solvers::{InterruptSolver, Solve};
 use serde::{Deserialize, Serialize};
 
 use crate::solver_backend::problem::{Problem, SessionData, Solution};
@@ -27,7 +26,11 @@ pub enum SessionState {
 
 pub trait SolverBackend {
     // TODO: better error type
-    fn start(&mut self, problem: Problem) -> Result<(), anyhow::Error>;
+    fn start(
+        &mut self,
+        problem: Problem,
+        callback: Option<Box<dyn FnMut() + Send>>,
+    ) -> Result<(), anyhow::Error>;
 
     fn session_state(&self) -> SessionState;
 
