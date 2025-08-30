@@ -2,7 +2,7 @@ use rustsat::solvers::{Interrupt, InterruptSolver, Solve};
 #[cfg(not(target_arch = "wasm32"))]
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 
-use crate::solver_backend::SolverBackend;
+use crate::solver_backend::WasmSolverBackend;
 
 mod app;
 mod solver_backend;
@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
     // Backend
-    let backend = SolverBackend::new(rt);
+    let backend = WasmSolverBackend::new(rt);
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

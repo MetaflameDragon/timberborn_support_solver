@@ -2,7 +2,7 @@
 
 use eframe::wasm_bindgen::{self, prelude::*};
 
-use crate::{App, solver_backend::SolverBackend};
+use crate::{App, solver_backend::WasmSolverBackend};
 
 /// Our handle to the web app from JavaScript.
 #[derive(Clone)]
@@ -31,7 +31,7 @@ impl WebHandle {
         &self,
         canvas: web_sys::HtmlCanvasElement,
     ) -> Result<(), wasm_bindgen::JsValue> {
-        let backend = SolverBackend::new();
+        let backend = WasmSolverBackend::new();
 
         self.runner
             .start(

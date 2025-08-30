@@ -8,7 +8,6 @@ use egui::{
     Ui, UiBuilder, Vec2, pos2, util::History, vec2,
 };
 use log::{error, info};
-use platform_type_selector::PlatformTypeSelector;
 use timberborn_platform_cruncher::{
     encoder::{PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
@@ -18,11 +17,14 @@ use timberborn_platform_cruncher::{
 };
 
 use crate::{
-    app::{frame_history::FrameHistory, solver_controls::SolverControlsResponse},
+    app::{
+        frame_history::FrameHistory, platform_type_selector::PlatformTypeSelector,
+        solver_controls::SolverControlsResponse,
+    },
     solver_backend::{
-        SessionResult, SolverBackend, SolverResponse, SolverSession,
-        batsat_wrapper::OnceLockInterrupter,
+        SolverBackend, SolverBackendResponse, SolverResponse, SolverSession,
         problem::{Problem, SessionData, Solution, StaticData},
+        wasm_solver::{OnceLockInterrupter, WasmSolverBackend},
     },
 };
 
@@ -37,8 +39,7 @@ struct TerrainTile {
 pub struct App {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
-    backend: SolverBackend,
-    active_session: Option<SolverSession<OnceLockInterrupter>>,
+    backend: WasmSolverBackend,
     displayed_layout: Option<PlatformLayout>,
     layout_stats: PlatformLayoutStats,
     frame_history: FrameHistory,
@@ -57,7 +58,7 @@ const DEFAULT_PLATFORMS: [(PlatformDef, isize); 8] = [
 ];
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: WasmSolverBackend) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
         backend.set_egui_ctx(cc.egui_ctx.clone());
 
@@ -65,7 +66,6 @@ impl App {
             terrain_grid,
             resize_modal: Default::default(),
             backend,
-            active_session: None,
             displayed_layout: None,
             frame_history: FrameHistory::default(),
             layout_stats: PlatformLayoutStats::new(5..100, 5.0),
@@ -143,18 +143,8 @@ impl App {
         .response
     }
 
-    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult> {
-        let SessionResult { solver_response, session_data, was_interrupted } =
-            SolverSession::try_recv(&mut self.active_session)?;
-        match solver_response {
-            SolverResponse::Sat(solution) => Some(SolverSessionResult::Sat {
-                solution,
-                limits: session_data.limits,
-                was_interrupted,
-            }),
-            SolverResponse::Unsat => Some(SolverSessionResult::Unsat),
-            SolverResponse::Interrupted => Some(SolverSessionResult::Interrupted),
-        }
+    fn try_get_current_session_results(&mut self) -> Option<SolverBackendResponse> {
+        self.backend.try_recv()?.map_err(|err| error!("{:?}", err)).ok()
     }
 
     fn start_solver(&mut self, limits: PlatformLimits) {
@@ -162,11 +152,7 @@ impl App {
         let platform_defs =
             self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect();
 
-        if let Some(session) = self.active_session.as_ref() {
-            session.interrupt()
-        }
-        self.active_session = self
-            .backend
+        self.backend
             .start(Problem {
                 static_data: StaticData { world, platform_defs },
                 session_data: SessionData { limits },
@@ -183,45 +169,27 @@ impl App {
     }
 
     fn process_active_session(&mut self, ctx: &Context) -> Option<()> {
-        match self.try_get_current_session_results()? {
-            SolverSessionResult::Unsat => {
-                info!("Unsat");
+        let results = self.try_get_current_session_results()?;
+
+        if let Some(solution) = results.solution {
+            info!("Sat");
+
+            let mut limits = results.session_data.limits;
+            let weight = solution.layout.total_weight(&limits.weights);
+
+            info!("Got a solution with weight {weight}");
+            self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
+            self.displayed_layout = Some(solution.layout);
+
+            if let Some(weight_subtracted) = weight.checked_sub(1)
+                && weight_subtracted > 0
+            {
+                limits.weight_limit = Some(weight_subtracted);
+                self.start_solver(limits);
             }
-            SolverSessionResult::Sat { solution, mut limits, was_interrupted, .. } => {
-                // info!("Sat\n{layout:#?}");
-                info!("Sat");
-                // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
-                //     limits
-                //         .card_limits
-                //         .entry(platform_def!(1, 1))
-                //         .insert_entry(platform_count_limit);
-                //     self.start_solver(limits);
-                // }
-
-                // If the session was interrupted, discard the result
-                if was_interrupted {
-                    info!("Session finished, but it was interrupted - aborting");
-                } else {
-                    let weight = solution.layout.total_weight(&limits.weights);
-
-                    info!("Got a solution with weight {weight}");
-                    self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
-                    self.displayed_layout = Some(solution.layout);
-
-                    if let Some(weight_subtracted) = weight.checked_sub(1)
-                        && weight_subtracted > 0
-                    {
-                        limits.weight_limit = Some(weight_subtracted);
-                        self.start_solver(limits);
-                    }
-                }
-            }
-
-            SolverSessionResult::Interrupted => {
-                web_sys::console::log_1(&"Got response: session interrupted.".into());
-                self.active_session = None;
-            }
-        };
+        } else {
+            info!("Unsat");
+        }
 
         Some(())
     }
@@ -245,7 +213,7 @@ impl eframe::App for App {
         });
 
         egui::TopBottomPanel::bottom("bottom panel").show(ctx, |ui| {
-            let session_state = SessionState::from_session(self.active_session.as_ref());
+            let session_state = self.backend.session_state();
             solver_controls::draw(ui, session_state, &self.layout_stats).map(|resp| match resp {
                 SolverControlsResponse::StartSession => {
                     let platform_defs = self.platform_type_selector.active_platform_defs();
@@ -258,7 +226,7 @@ impl eframe::App for App {
                     self.start_solver(limits);
                 }
                 SolverControlsResponse::AbortSession => {
-                    self.active_session.as_ref().map(|session| session.interrupt());
+                    self.backend.interrupt();
                 }
             });
         });
@@ -305,7 +273,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.active_session.as_ref().map(|session| session.interrupt());
+        self.backend.interrupt();
     }
 }
 
@@ -315,33 +283,11 @@ fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
     (a > 0 && b > 0).then_some(PlatformDef::new(Dimensions::new(a, b)))
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum SessionState {
-    Idle,
-    Running,
-    Aborted,
-}
-
-impl SessionState {
-    pub fn from_session<T>(session: Option<&SolverSession<T>>) -> SessionState {
-        match session {
-            None => SessionState::Idle,
-            Some(session) => {
-                if session.was_interrupted() {
-                    SessionState::Aborted
-                } else {
-                    SessionState::Running
-                }
-            }
-        }
-    }
-}
-
 pub mod solver_controls {
     use eframe::epaint::Color32;
     use egui::{Button, RichText, TextStyle, Ui};
 
-    use crate::app::{PlatformLayoutStats, SessionState};
+    use crate::{app::PlatformLayoutStats, solver_backend::SessionState};
 
     #[derive(Copy, Clone, Debug)]
     pub enum SolverControlsResponse {
@@ -356,7 +302,7 @@ pub mod solver_controls {
     ) -> Option<SolverControlsResponse> {
         ui.horizontal(|ui| {
             let is_running = matches!(session_state, SessionState::Running);
-            let is_aborted = matches!(session_state, SessionState::Aborted);
+            let is_interrupted = matches!(session_state, SessionState::Interrupted);
 
             let button_text = if !is_running {
                 RichText::new("Solve").color(Color32::GREEN)
@@ -364,7 +310,7 @@ pub mod solver_controls {
                 RichText::new("Abort").color(Color32::RED)
             }
             .size(24f32);
-            let solve_btn_resp = ui.add_enabled(!is_aborted, Button::new(button_text));
+            let solve_btn_resp = ui.add_enabled(!is_interrupted, Button::new(button_text));
 
             let response = solve_btn_resp.clicked().then_some(if is_running {
                 SolverControlsResponse::AbortSession
