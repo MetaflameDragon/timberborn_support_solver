@@ -1,8 +1,6 @@
 #![allow(clippy::mem_forget)] // False positives from #[wasm_bindgen] macro
 
-use batsat::callbacks::AsyncInterrupt;
 use eframe::wasm_bindgen::{self, prelude::*};
-use rustsat_batsat;
 
 use crate::{App, solver_backend::SolverBackend};
 
@@ -12,8 +10,6 @@ use crate::{App, solver_backend::SolverBackend};
 pub struct WebHandle {
     runner: eframe::WebRunner,
 }
-
-type Solver = rustsat_batsat::Solver<AsyncInterrupt>;
 
 #[wasm_bindgen]
 impl WebHandle {

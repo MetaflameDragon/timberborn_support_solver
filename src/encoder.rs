@@ -87,7 +87,6 @@ use std::{
 };
 
 use itertools::Itertools;
-use log::trace;
 use petgraph::{
     adj::UnweightedList,
     graph::IndexType,
@@ -675,7 +674,7 @@ impl Encoding {
                 self.vars
                     .iter_dims_vars(platform_type.dims())
                     .map(|vars| vars.map(|var| var.pos_lit()).collect())
-                    .unwrap_or(vec![])
+                    .unwrap_or_default()
             };
 
             if let Some(&limit) = limits.card_limits.get(&platform_type) {

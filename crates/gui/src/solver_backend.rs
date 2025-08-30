@@ -1,24 +1,11 @@
-use std::{
-    sync::{OnceLock, atomic, atomic::AtomicBool},
-    time::Duration,
-};
+use std::sync::{atomic, atomic::AtomicBool};
 
 use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 use futures_channel::oneshot;
 use log::warn;
-use rustsat::{
-    instances::Cnf,
-    solvers::{
-        Interrupt, InterruptSolver, Solve, SolveIncremental, SolveStats, SolverResult, SolverStats,
-    },
-    types::{Assignment, Cl, Clause, Lit, TernaryVal, Var},
-};
+use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
 use serde::{Deserialize, Serialize};
-use timberborn_platform_cruncher::{
-    encoder::{Decoder, Encoding, PlatformLimits},
-    platform::PlatformDef,
-    world::World,
-};
+use timberborn_platform_cruncher::encoder::Encoding;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
 
@@ -117,9 +104,6 @@ impl SolverBackend {
         &mut self,
         problem: Problem,
     ) -> anyhow::Result<SolverSession<OnceLockInterrupter>> {
-        let encoding =
-            Encoding::encode(&problem.static_data.platform_defs, problem.static_data.world.grid());
-
         let (tx, rx) = oneshot::channel();
 
         let session = SolverSession {

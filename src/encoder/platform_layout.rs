@@ -5,14 +5,11 @@ use std::{
 };
 
 use itertools::Itertools;
-use log::trace;
 use new_zealand::nz;
-use rustsat::types::Assignment;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     TERRAIN_SUPPORT_DISTANCE,
-    encoder::EncodingVars,
     math::{Grid, Point},
     platform::{Platform, PlatformDef},
     world::World,

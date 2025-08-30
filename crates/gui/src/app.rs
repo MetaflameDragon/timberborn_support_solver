@@ -2,21 +2,15 @@ use std::ops::{ControlFlow, Range};
 
 #[allow(unused_imports)] // Keeping this Anyhow import as Context would clash with egui
 use anyhow::Context as _;
-use eframe::{Frame, emath::Align};
+use eframe::Frame;
 use egui::{
-    Button, Color32, Context, DragValue, Layout, Modal, PointerButton, Rect, Response, RichText,
-    Sense, Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, Widget, pos2, util::History, vec2,
+    Color32, Context, DragValue, Modal, PointerButton, Rect, Response, Sense, Stroke, StrokeKind,
+    Ui, UiBuilder, Vec2, pos2, util::History, vec2,
 };
-use itertools::Itertools;
-use log::{error, info, trace};
+use log::{error, info};
 use platform_type_selector::PlatformTypeSelector;
-use rustsat::{
-    solvers::{Interrupt, Solve, SolveStats, SolverResult},
-    types::{Assignment, TernaryVal},
-};
 use timberborn_platform_cruncher::{
-    encoder,
-    encoder::{Encoding, PlatformLayout, PlatformLimits},
+    encoder::{PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
     platform::PlatformDef,
     platform_def,
@@ -168,7 +162,9 @@ impl App {
         let platform_defs =
             self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect();
 
-        self.active_session.as_ref().map(|session| session.interrupt());
+        if let Some(session) = self.active_session.as_ref() {
+            session.interrupt()
+        }
         self.active_session = self
             .backend
             .start(Problem {
@@ -309,7 +305,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.active_session.as_ref().map(|mut session| session.interrupt());
+        self.active_session.as_ref().map(|session| session.interrupt());
     }
 }
 
@@ -320,7 +316,7 @@ fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
 }
 
 #[derive(Copy, Clone, Debug)]
-enum SessionState {
+pub enum SessionState {
     Idle,
     Running,
     Aborted,
@@ -453,7 +449,7 @@ impl ResizeModal {
 }
 
 #[derive(Clone, Debug)]
-struct PlatformLayoutStats {
+pub struct PlatformLayoutStats {
     weight: History<isize>,
 }
 
