@@ -2,7 +2,10 @@
 
 use eframe::wasm_bindgen::{self, prelude::*};
 
-use crate::{App, solver_backend::WasmSolverBackend};
+use crate::{App, web::wasm_solver_backend::WasmSolverBackend};
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_solver_backend;
 
 /// Our handle to the web app from JavaScript.
 #[derive(Clone)]

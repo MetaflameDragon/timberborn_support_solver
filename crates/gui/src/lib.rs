@@ -1,4 +1,4 @@
-mod app;
+pub mod app;
 pub mod solver_backend;
 
 pub use crate::app::App;

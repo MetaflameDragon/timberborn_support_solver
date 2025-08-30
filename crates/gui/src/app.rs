@@ -16,15 +16,16 @@ use timberborn_platform_cruncher::{
     world::{World, WorldGrid},
 };
 
+#[cfg(target_arch = "wasm32")]
+use crate::wasm_solver_backend::{OnceLockInterrupter, WasmSolverBackend};
 use crate::{
     app::{
         frame_history::FrameHistory, platform_type_selector::PlatformTypeSelector,
         solver_controls::SolverControlsResponse,
     },
     solver_backend::{
-        SolverBackend, SolverBackendResponse, SolverResponse, SolverSession,
+        SolverBackend, SolverBackendResponse, SolverResponse,
         problem::{Problem, SessionData, Solution, StaticData},
-        wasm_solver::{OnceLockInterrupter, WasmSolverBackend},
     },
 };
 

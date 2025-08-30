@@ -1,11 +1,9 @@
 use rustsat::solvers::{Interrupt, InterruptSolver, Solve};
 #[cfg(not(target_arch = "wasm32"))]
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
+pub use timberborn_platform_cruncher_gui::app;
 
-use crate::solver_backend::WasmSolverBackend;
-
-mod app;
-mod solver_backend;
+// TODO: remake a proper backend for native
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> anyhow::Result<()> {
