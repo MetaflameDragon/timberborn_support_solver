@@ -430,8 +430,8 @@ impl ResizeModal {
     }
 
     fn modal_ui(&mut self, ui: &mut Ui) -> ControlFlow<Option<Dimensions>> {
-        ui.add(DragValue::new(&mut self.stored_value.width).speed(1).fixed_decimals(0));
-        ui.add(DragValue::new(&mut self.stored_value.height).speed(1).fixed_decimals(0));
+        ui.add(DragValue::new(&mut self.stored_value.width).speed(0.05).fixed_decimals(0));
+        ui.add(DragValue::new(&mut self.stored_value.height).speed(0.05).fixed_decimals(0));
 
         // Limit each axis to 1 minimum
         self.stored_value.width = self.stored_value.width.max(1);
