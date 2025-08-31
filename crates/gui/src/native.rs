@@ -1,20 +1,20 @@
-use rustsat::solvers::{Interrupt, InterruptSolver, Solve};
-use rustsat_glucose::simp::Glucose as GlucoseSimp;
+use rustsat::solvers::{Interrupt, InterruptSolver, Solve, SolveStats};
 use timberborn_platform_cruncher_gui::app;
 
-use crate::native::native_solver::NativeSolver;
+use crate::native::native_solver::{InterruptableSolver, NativeSolver};
 
 mod native_solver;
 
-// TODO: remake a proper backend for native
-
-pub fn run() -> anyhow::Result<()> {
+pub fn run<S>() -> anyhow::Result<()>
+where
+    S: Default + InterruptableSolver + Solve + SolveStats + Send + 'static,
+{
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
     // Backend
-    let backend = NativeSolver::new(rt);
+    let backend = NativeSolver::<S>::new(rt);
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -30,4 +30,16 @@ pub fn run() -> anyhow::Result<()> {
     .expect("Error while running frontend");
 
     Ok(())
+}
+
+impl InterruptableSolver for rustsat_glucose::simp::Glucose {
+    type Interrupter = rustsat_glucose::simp::Interrupter;
+
+    fn get_interrupter(&mut self) -> Self::Interrupter {
+        self.interrupter()
+    }
+
+    fn interrupt(interrupter: &Self::Interrupter) {
+        interrupter.interrupt();
+    }
 }

@@ -5,7 +5,7 @@ pub mod native;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> anyhow::Result<()> {
-    native::run()
+    native::run::<rustsat_glucose::simp::Glucose>()
 }
 
 #[cfg(target_arch = "wasm32")]

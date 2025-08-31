@@ -1,9 +1,8 @@
-#[cfg(target_arch = "wasm32")]
 use std::sync::{Arc, OnceLock, atomic, atomic::AtomicBool};
 
 use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
 use futures_channel::oneshot;
-use log::warn;
+use log::{info, warn};
 use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
 use serde::{Deserialize, Serialize};
 use timberborn_platform_cruncher::encoder::Encoding;
@@ -74,18 +73,11 @@ impl<I: InterruptSolver> SolverSession<I> {
 }
 
 pub struct WasmSolverBackend {
-    #[cfg(not(target_arch = "wasm32"))]
-    rt: tokio::runtime::Runtime,
     egui_ctx: Option<egui::Context>,
     session: Option<SolverSession<OnceLockInterrupter>>,
 }
 
 impl WasmSolverBackend {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(rt: tokio::runtime::Runtime) -> Self {
-        Self { rt, egui_ctx: None }
-    }
-    #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
         Self { egui_ctx: None, session: None }
     }
@@ -194,9 +186,6 @@ impl SolverBackend for WasmSolverBackend {
 
     fn try_recv(&mut self) -> Option<Result<SolverBackendResponse, anyhow::Error>> {
         let session = self.session.as_mut()?;
-        if session.was_interrupted() {
-            return None;
-        }
 
         let tx_result = session.rx.try_recv().transpose()?;
         // Set session to None if a response has been returned
@@ -204,6 +193,10 @@ impl SolverBackend for WasmSolverBackend {
 
         match tx_result {
             Ok(solver_response) => {
+                if session.was_interrupted() {
+                    info!("Solver was interrupted previously - disregarding response");
+                    return None;
+                }
                 let solution = match solver_response {
                     SolverResponse::Sat(solution) => Some(solution),
                     SolverResponse::Unsat => None,
@@ -213,8 +206,12 @@ impl SolverBackend for WasmSolverBackend {
                 Some(Ok(SolverBackendResponse { solution, session_data: session.session_data }))
             }
             Err(_) => {
-                // Not running or already done
-                warn!(target: "solver backend", "Session channel was closed");
+                // The channel might be closed if the solver was interrupted
+                // It should return an Interrupted response, but this only warns if it
+                // closes unexpectedly
+                if !session.was_interrupted() {
+                    warn!(target: "solver backend", "Session channel was unexpectedly closed");
+                }
                 None
             }
         }
