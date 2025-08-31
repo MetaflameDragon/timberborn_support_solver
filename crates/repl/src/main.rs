@@ -289,7 +289,7 @@ async fn solver_loop(
 
     loop {
         // info!("Solving for n <= {}...", run_config.max_platforms());
-        let instance = encoding.with_limits(&limits);
+        let (instance, decoder) = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
 
         let (solver_future, interrupter) = run_solver(GlucoseSimp::default(), cnf)?;
@@ -325,9 +325,7 @@ async fn solver_loop(
 
         let (result, solver) = solver_future.future().await?;
         let layout = match result {
-            SolverResult::Sat => {
-                PlatformLayout::from_assignment(&solver.full_solution()?, encoding.vars())
-            }
+            SolverResult::Sat => decoder.decode_assignment(&solver.full_solution()?),
             SolverResult::Unsat => {
                 println!("No solution found for the current constraints");
                 return Ok(());

@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::platform::PlatformDef;
 
 #[derive(Clone, Debug, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct PlatformLimits {
     /// Cardinality limits
     pub card_limits: HashMap<PlatformDef, usize>,

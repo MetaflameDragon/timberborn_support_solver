@@ -4,19 +4,12 @@ use std::ops::{ControlFlow, Range};
 use anyhow::Context as _;
 use eframe::Frame;
 use egui::{
-    Button, Color32, Context, DragValue, Modal, PointerButton, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, Widget, pos2, util::History, vec2,
+    Color32, Context, DragValue, Modal, PointerButton, Rect, Response, Sense, Stroke, StrokeKind,
+    Ui, UiBuilder, Vec2, pos2, util::History, vec2,
 };
-use itertools::Itertools;
 use log::{error, info};
-use platform_type_selector::PlatformTypeSelector;
-use rustsat::{
-    solvers::{Interrupt, Solve, SolveStats, SolverResult},
-    types::{Assignment, TernaryVal},
-};
 use timberborn_platform_cruncher::{
-    encoder,
-    encoder::{Encoding, PlatformLayout, PlatformLimits},
+    encoder::{PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
     platform::PlatformDef,
     platform_def,
@@ -24,8 +17,14 @@ use timberborn_platform_cruncher::{
 };
 
 use crate::{
-    app::frame_history::FrameHistory,
-    solver_backend::{SolverBackend, SolverResponse, SolverSession},
+    app::{
+        frame_history::FrameHistory, platform_type_selector::PlatformTypeSelector,
+        solver_controls::SolverControlsResponse,
+    },
+    solver_backend::{
+        SolverBackend, SolverBackendResponse,
+        problem::{Problem, SessionData, StaticData},
+    },
 };
 
 mod frame_history;
@@ -36,14 +35,10 @@ struct TerrainTile {
     terrain: bool,
 }
 
-pub struct App<S>
-where
-    S: Interrupt,
-{
+pub struct App<Backend: SolverBackend> {
     terrain_grid: Grid<TerrainTile>,
     resize_modal: ResizeModal,
-    backend: SolverBackend,
-    active_session: Option<SolverSession<S>>,
+    backend: Backend,
     displayed_layout: Option<PlatformLayout>,
     layout_stats: PlatformLayoutStats,
     frame_history: FrameHistory,
@@ -61,19 +56,14 @@ const DEFAULT_PLATFORMS: [(PlatformDef, isize); 8] = [
     (platform_def!(5, 5), 4),
 ];
 
-impl<S> App<S>
-where
-    S: Interrupt,
-{
-    pub fn new(cc: &eframe::CreationContext<'_>, mut backend: SolverBackend) -> Self {
+impl<Backend: SolverBackend> App<Backend> {
+    pub fn new(_cc: &eframe::CreationContext<'_>, backend: Backend) -> Self {
         let terrain_grid = Grid::new(Dimensions::new(24, 24));
-        backend.set_egui_ctx(cc.egui_ctx.clone());
 
         App {
             terrain_grid,
             resize_modal: Default::default(),
             backend,
-            active_session: None,
             displayed_layout: None,
             frame_history: FrameHistory::default(),
             layout_stats: PlatformLayoutStats::new(5..100, 5.0),
@@ -85,23 +75,29 @@ where
         ui.scope_builder(UiBuilder::new().sense(Sense::drag()), |ui| {
             egui::Frame::canvas(ui.style()).show(ui, |ui| {
                 let corner_point = ui.next_widget_position();
+                let available_size = ui.available_size();
+
+                let terrain_dims = self.terrain_grid.dims();
+                let terrain_dims_vec = vec2(terrain_dims.width as f32, terrain_dims.height as f32);
 
                 // Spacing between items
                 let spacing = 2f32;
                 let min_tile_size = 3f32;
 
-                let total_width = ui.available_width();
-                let tile_size = ((total_width + spacing) / (self.terrain_grid.dims().width as f32)
-                    - spacing)
-                    .max(min_tile_size);
+                let max_tile_size = (available_size + vec2(spacing, spacing)) / terrain_dims_vec
+                    - vec2(spacing, spacing);
+                let tile_size = max_tile_size.min_elem().max(min_tile_size);
+
                 let get_offset = |p: Point, rel_tile_offset: Vec2| -> Vec2 {
                     ((pos2(p.x as f32, p.y as f32)) * (tile_size + spacing)
                         + rel_tile_offset * tile_size)
                         .to_vec2()
                 };
 
-                let grid_vec =
-                    get_offset(self.terrain_grid.dims().corner_point_incl().unwrap(), Vec2::ONE);
+                let grid_vec = get_offset(terrain_dims.corner_point_incl().unwrap(), Vec2::ONE);
+                ui.set_min_size(
+                    terrain_dims_vec * min_tile_size + (terrain_dims_vec - Vec2::ONE) * spacing,
+                );
                 ui.set_width(grid_vec.x);
                 ui.set_height(grid_vec.y);
 
@@ -145,48 +141,23 @@ where
         .response
     }
 
-    fn try_get_current_session_results(&mut self) -> Option<SolverSessionResult<S>>
-    where
-        S: Solve + SolveStats,
-    {
-        let resp = SolverSession::try_recv(&mut self.active_session)?;
-        match resp.result {
-            Ok(SolverResult::Sat) => match resp.solver.full_solution() {
-                Ok(asgn) => {
-                    let mut layout = PlatformLayout::from_assignment(&asgn, resp.encoding.vars());
-                    layout.run_trivial_optimization(&self.make_world());
-                    Some(SolverSessionResult::Sat { layout, response: resp, assignment: asgn })
-                }
-                Err(err) => {
-                    error!("Failed to get assignment, but the solver reported SAT: {err:?}");
-                    None
-                }
-            },
-            Ok(SolverResult::Unsat) => Some(SolverSessionResult::Unsat),
-            Ok(SolverResult::Interrupted) => {
-                info!("Solver interrupted");
-                None
-            }
-            Err(err) => {
-                error!("Solver error: {err:?}");
-                None
-            }
-        }
+    fn try_get_current_session_results(&mut self) -> Option<SolverBackendResponse> {
+        self.backend.try_recv()?.map_err(|err| error!("{:?}", err)).ok()
     }
-    fn start_solver(&mut self, limits: PlatformLimits)
-    where
-        S: Solve + Default + Send + 'static,
-    {
-        let world = self.make_world();
-        let encoding = Encoding::encode(
-            &self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect_vec(),
-            world.grid(),
-        );
 
-        self.active_session.take().map(|mut session| session.interrupt());
-        self.active_session = self
-            .backend
-            .start(encoding, limits)
+    fn start_solver(&mut self, ctx: Context, limits: PlatformLimits) {
+        let world = self.make_world();
+        let platform_defs =
+            self.platform_type_selector.active_platform_defs().map(|(def, _)| def).collect();
+
+        self.backend
+            .start(
+                Problem {
+                    static_data: StaticData { world, platform_defs },
+                    session_data: SessionData { limits },
+                },
+                Some(Box::new(move || ctx.request_repaint())),
+            )
             .map_err(|err| {
                 error!("Failed to start solver: {err}");
             })
@@ -197,59 +168,61 @@ where
         let world_grid = WorldGrid(self.terrain_grid.iter_map(|tile| tile.terrain));
         World::new(world_grid)
     }
+
+    fn process_active_session(&mut self, ctx: &Context) -> Option<()> {
+        let results = self.try_get_current_session_results()?;
+
+        if let Some(solution) = results.solution {
+            info!("Sat");
+
+            let mut limits = results.session_data.limits;
+            let weight = solution.layout.total_weight(&limits.weights);
+
+            info!("Got a solution with weight {weight}");
+            self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
+            self.displayed_layout = Some(solution.layout);
+
+            if let Some(weight_subtracted) = weight.checked_sub(1)
+                && weight_subtracted > 0
+            {
+                limits.weight_limit = Some(weight_subtracted);
+                self.start_solver(ctx.clone(), limits);
+            }
+        } else {
+            info!("Unsat");
+        }
+
+        Some(())
+    }
 }
 
-#[derive(Debug)]
-enum SolverSessionResult<S> {
-    Sat { layout: PlatformLayout, response: SolverResponse<S>, assignment: Assignment },
-    Unsat,
-}
-
-impl<S> eframe::App for App<S>
-where
-    S: Interrupt + Solve + SolveStats + Default + Send + 'static,
-{
+impl<Backend: SolverBackend> eframe::App for App<Backend> {
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
         self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
 
-        match self.try_get_current_session_results() {
-            None => {}
-            Some(SolverSessionResult::Unsat) => {
-                info!("Unsat");
-            }
-            Some(SolverSessionResult::Sat {
-                layout,
-                response: SolverResponse { mut limits, .. },
-                ..
-            }) => {
-                // info!("Sat\n{layout:#?}");
-                info!("Sat");
-                // if let Some(platform_count_limit) = layout.platform_count().checked_sub(1) {
-                //     limits
-                //         .card_limits
-                //         .entry(platform_def!(1, 1))
-                //         .insert_entry(platform_count_limit);
-                //     self.start_solver(limits);
-                // }
-
-                let weight = layout.total_weight(&limits.weights);
-
-                info!("Got a solution with weight {weight}");
-                self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
-
-                if let Some(weight_subtracted) = weight.checked_sub(1)
-                    && weight_subtracted > 0
-                {
-                    limits.weight_limit = Some(weight_subtracted);
-                    self.start_solver(limits);
-                }
-
-                self.displayed_layout = Some(layout);
-            }
-        };
+        self.process_active_session(ctx);
 
         egui::SidePanel::left("left panel").show(ctx, |ui| {
             self.platform_type_selector.ui(ui);
+        });
+
+        egui::TopBottomPanel::bottom("bottom panel").show(ctx, |ui| {
+            let session_state = self.backend.session_state();
+            solver_controls::draw(ui, session_state, &self.layout_stats).map(|resp| match resp {
+                SolverControlsResponse::StartSession => {
+                    let platform_defs = self.platform_type_selector.active_platform_defs();
+                    let limits = PlatformLimits::new_with_weights(
+                        Default::default(),
+                        platform_defs.collect(),
+                        None,
+                    );
+                    self.layout_stats.clear();
+                    self.start_solver(ctx.clone(), limits);
+                }
+                SolverControlsResponse::AbortSession => {
+                    self.backend.interrupt();
+                }
+            });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -290,53 +263,11 @@ where
                 }
                 info!("{tile_index:?}");
             }
-
-            ui.horizontal(|ui| {
-                let is_running = self.active_session.is_some();
-                let button_text = if !is_running {
-                    RichText::new("Solve").color(Color32::GREEN)
-                } else {
-                    RichText::new("Abort").color(Color32::RED)
-                }
-                .size(24f32);
-                let solve_btn_resp = Button::new(button_text).ui(ui);
-
-                if solve_btn_resp.clicked() {
-                    if !is_running {
-                        let limits = PlatformLimits::new_with_weights(
-                            Default::default(),
-                            self.platform_type_selector.active_platform_defs().collect(),
-                            None,
-                        );
-                        self.layout_stats.clear();
-                        self.start_solver(limits);
-                    } else {
-                        self.active_session.take().map(|mut session| session.interrupt());
-                    }
-                }
-
-                if is_running {
-                    ui.spinner();
-                }
-
-                if let Some(weight) = self.layout_stats.weight.latest() {
-                    ui.horizontal_wrapped(|ui| {
-                        // From https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/misc_demo_window.rs#L211
-                        // Trick so we don't have to add spaces in the text below:
-                        let width =
-                            ui.fonts(|f| f.glyph_width(&TextStyle::Body.resolve(ui.style()), ' '));
-                        ui.spacing_mut().item_spacing.x = width;
-
-                        ui.label("Solution weight: ");
-                        ui.colored_label(Color32::GREEN, format!("{weight}"));
-                    });
-                }
-            });
         });
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.active_session.take().map(|mut session| session.interrupt());
+        self.backend.interrupt();
     }
 }
 
@@ -344,6 +275,63 @@ fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
     let (a, b) = input.trim().split_once('x')?;
     let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
     (a > 0 && b > 0).then_some(PlatformDef::new(Dimensions::new(a, b)))
+}
+
+pub mod solver_controls {
+    use eframe::epaint::Color32;
+    use egui::{Button, RichText, TextStyle, Ui};
+
+    use crate::{app::PlatformLayoutStats, solver_backend::SessionState};
+
+    #[derive(Copy, Clone, Debug)]
+    pub enum SolverControlsResponse {
+        StartSession,
+        AbortSession,
+    }
+
+    pub fn draw(
+        ui: &mut Ui,
+        session_state: SessionState,
+        layout_stats: &PlatformLayoutStats,
+    ) -> Option<SolverControlsResponse> {
+        ui.horizontal(|ui| {
+            let is_running = matches!(session_state, SessionState::Running);
+            let is_interrupted = matches!(session_state, SessionState::Interrupted);
+
+            let button_text = if !is_running {
+                RichText::new("Solve").color(Color32::GREEN)
+            } else {
+                RichText::new("Abort").color(Color32::RED)
+            }
+            .size(24f32);
+            let solve_btn_resp = ui.add_enabled(!is_interrupted, Button::new(button_text));
+
+            let response = solve_btn_resp.clicked().then_some(if is_running {
+                SolverControlsResponse::AbortSession
+            } else {
+                SolverControlsResponse::StartSession
+            });
+
+            if is_running {
+                ui.spinner();
+            }
+
+            if let Some(weight) = layout_stats.weight.latest() {
+                ui.horizontal_wrapped(|ui| {
+                    // From https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/misc_demo_window.rs#L211
+                    // Trick so we don't have to add spaces in the text below:
+                    let width =
+                        ui.fonts(|f| f.glyph_width(&TextStyle::Body.resolve(ui.style()), ' '));
+                    ui.spacing_mut().item_spacing.x = width;
+
+                    ui.label("Solution weight: ");
+                    ui.colored_label(Color32::GREEN, format!("{weight}"));
+                });
+            }
+            response
+        })
+        .inner
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -378,8 +366,8 @@ impl ResizeModal {
     }
 
     fn modal_ui(&mut self, ui: &mut Ui) -> ControlFlow<Option<Dimensions>> {
-        ui.add(DragValue::new(&mut self.stored_value.width).speed(1).fixed_decimals(0));
-        ui.add(DragValue::new(&mut self.stored_value.height).speed(1).fixed_decimals(0));
+        ui.add(DragValue::new(&mut self.stored_value.width).speed(0.05).fixed_decimals(0));
+        ui.add(DragValue::new(&mut self.stored_value.height).speed(0.05).fixed_decimals(0));
 
         // Limit each axis to 1 minimum
         self.stored_value.width = self.stored_value.width.max(1);
@@ -401,7 +389,7 @@ impl ResizeModal {
 }
 
 #[derive(Clone, Debug)]
-struct PlatformLayoutStats {
+pub struct PlatformLayoutStats {
     weight: History<isize>,
 }
 

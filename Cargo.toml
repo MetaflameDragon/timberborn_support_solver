@@ -6,11 +6,12 @@ name = "timberborn-platform-cruncher"
 version = "0.1.0"
 edition = "2024"
 resolver = "3"
+rust-version = "1.89.0"
 
 [lib]
 
 [dependencies]
-rustsat = { version = "0.7.2", features = [] }
+rustsat = { version = "0.7.3", features = [] }
 assertables = "9.5.5"
 log = "0.4.27"
 test-case = "3.3.1"
@@ -19,3 +20,11 @@ derive_more = { version = "2.0.1", features = ["deref", "deref_mut", "from", "is
 new_zealand = "0.1.6"
 petgraph = "0.8.2"
 itertools = "0.14.0"
+
+[patch.crates-io]
+# TODO: rustsat currently depends on cpu-time, which is incompatible with WASM
+# The patch depends on std::time instead, which still doesn't work for WASM
+# web-time works, which is patched in as a cpu-time substitute
+#cpu-time = { path = "patches/cpu-time-patch" } # Specified in the build script, since it's for WASM only
+#rustsat = { git = "https://github.com/chrjabs/rustsat.git", rev = "57261f5c4993ad3bb1e38986ca9c238ed7a328d0" }
+#rustsat-batsat = { git = "https://github.com/chrjabs/rustsat.git", rev = "57261f5c4993ad3bb1e38986ca9c238ed7a328d0" }

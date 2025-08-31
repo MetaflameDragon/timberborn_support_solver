@@ -431,6 +431,37 @@ pub struct Encoding {
     instance: SatInstance,
 }
 
+#[derive(Clone, Debug)]
+pub struct Decoder {
+    var_platform_map: HashMap<Var, Platform>,
+}
+
+impl Decoder {
+    #[must_use]
+    pub fn decode_assignment(&self, assignment: &Assignment) -> PlatformLayout {
+        let mut platforms = HashMap::new();
+
+        // iter() goes over all assigned literals (excl. DontCare)
+        for plat in assignment
+            .iter()
+            .filter_map(|lit| lit.is_pos().then_some(lit.var()))
+            .filter_map(|var| self.var_platform_map.get(&var).copied())
+        {
+            platforms
+                .entry(plat.point())
+                .and_modify(|previous: &mut Platform| {
+                    if previous.def().dims() < plat.def().dims() {
+                        // Update only if larger
+                        *previous = plat;
+                    }
+                })
+                .or_insert(plat);
+        }
+
+        PlatformLayout { platforms }
+    }
+}
+
 impl Encoding {
     pub fn encode(platform_defs: &[PlatformDef], terrain: &WorldGrid) -> Encoding {
         // TODO: A lot of places here rely on all tiles having all platform vars
@@ -616,7 +647,7 @@ impl Encoding {
         &self.vars
     }
 
-    pub fn with_limits(&self, limits: &PlatformLimits) -> SatInstance {
+    pub fn with_limits(&self, limits: &PlatformLimits) -> (SatInstance, Decoder) {
         let mut instance = self.instance.clone();
         let mut weight_pb = limits.weight_limit.map(|limit| PbConstraint::new_ub([], limit));
 
@@ -643,7 +674,7 @@ impl Encoding {
                 self.vars
                     .iter_dims_vars(platform_type.dims())
                     .map(|vars| vars.map(|var| var.pos_lit()).collect())
-                    .unwrap_or(vec![])
+                    .unwrap_or_default()
             };
 
             if let Some(&limit) = limits.card_limits.get(&platform_type) {
@@ -660,10 +691,39 @@ impl Encoding {
 
         if let Some(weight_pb) = weight_pb {
             instance.add_pb_constr(weight_pb);
-        }
+        };
+
+        let decoder = Decoder {
+            var_platform_map: self
+                .vars
+                .var_map
+                .iter()
+                .filter_map(|(var, item)| {
+                    if let EncodedItem::Platform { point, dims } = item {
+                        // Platforms are stored as points & dimensions, rotation info is lost
+                        // This converts dimensions back to ther PlatformDef
+                        let def = self
+                            .vars
+                            .dim_map
+                            .get(dims)
+                            // Since it can be technically bound to multiple platform defs,
+                            // we just take the first one
+                            .and_then(|s| s.iter().next())
+                            .expect("encoded platform did not map to a platform def");
+
+                        debug_assert!(def.dims() == *dims || def.dims() == dims.flipped());
+                        let rotated = def.dims() != *dims;
+
+                        Some((*var, Platform::new(*point, *def, rotated)))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
 
         // TODO: might need a Result?
-        instance
+        (instance, decoder)
     }
 }
 
