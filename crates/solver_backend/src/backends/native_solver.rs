@@ -4,6 +4,7 @@ use futures_channel::{oneshot, oneshot::Canceled};
 use log::{error, info, trace, warn};
 use rustsat::solvers::{Solve, SolveStats, SolverResult};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use timberborn_platform_cruncher::encoder::Encoding;
 
 use crate::{
@@ -29,6 +30,10 @@ pub trait InterruptableSolver {
 impl<S: InterruptableSolver> NativeSolver<S> {
     pub fn new(rt: tokio::runtime::Handle) -> Self {
         Self { rt, session: None }
+    }
+
+    pub async fn response_future(&mut self) -> Option<Result<SessionResult, ChannelClosed>> {
+        Some(self.session.take()?.response_future().await)
     }
 }
 
@@ -134,20 +139,20 @@ where
         let (session, tx_result) =
             take_if_some(&mut self.session, |s| s.rx.try_recv().transpose())?;
 
-        Some(process_tx_result(tx_result, session))
+        Some(process_tx_result(tx_result, session.was_interrupted(), session.session_data))
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Error)]
 #[derive(Serialize, Deserialize)]
+#[error("channel closed")]
 pub struct ChannelClosed;
 
-fn process_tx_result<S: InterruptableSolver>(
+fn process_tx_result(
     tx_result: Result<SolverResponse, Canceled>,
-    session: SolverSession<S>,
+    was_interrupted: bool,
+    session_data: SessionData,
 ) -> Result<SessionResult, ChannelClosed> {
-    let was_interrupted = session.was_interrupted();
-
     // The channel might be closed if the solver was interrupted
     // It should respond with Interrupted, so this is always reported as a warning
 
@@ -155,7 +160,6 @@ fn process_tx_result<S: InterruptableSolver>(
         .inspect_err(|_| warn!("Session channel closed unexpectedly"))
         .map_err(|_| ChannelClosed)?;
 
-    let session_data = session.session_data;
     trace!("Received response: {:?}", response);
 
     // The solver might still return a response even if it has been interrupted
@@ -179,12 +183,20 @@ impl<S: InterruptableSolver> SolverSession<S> {
     pub fn was_interrupted(&self) -> bool {
         self.was_interrupted.load(atomic::Ordering::SeqCst)
     }
-}
 
-impl<S: InterruptableSolver> SolverSession<S> {
     pub fn interrupt(&self) {
         self.was_interrupted.store(true, atomic::Ordering::SeqCst);
         S::interrupt(&self.interrupter);
+    }
+
+    pub async fn response_future(self) -> Result<SessionResult, ChannelClosed> {
+        let result = self.rx.await;
+
+        process_tx_result(
+            result,
+            self.was_interrupted.load(atomic::Ordering::SeqCst),
+            self.session_data,
+        )
     }
 }
 

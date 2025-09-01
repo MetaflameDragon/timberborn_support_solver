@@ -3098,6 +3098,7 @@ dependencies = [
  "rustsat",
  "rustsat-glucose",
  "serde",
+ "thiserror 2.0.16",
  "timberborn-platform-cruncher",
  "tokio",
 ]

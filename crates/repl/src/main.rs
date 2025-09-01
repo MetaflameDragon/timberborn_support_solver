@@ -16,8 +16,8 @@ use owo_colors::OwoColorize;
 use rustsat::solvers::{InterruptSolver, Solve, SolveStats, SolverResult};
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use solver_backend::{
-    SolverBackend,
-    backends::native_solver::NativeSolver,
+    SessionResult, SolverBackend, SolverResponse,
+    backends::native_solver::{ChannelClosed, NativeSolver},
     problem::{Problem, SessionData, StaticData},
 };
 use thiserror::Error;
@@ -339,29 +339,32 @@ async fn solver_loop(
             session_data: SessionData { limits },
             static_data: StaticData {
                 world: project.world.clone(),
-                platform_defs: PLATFORMS_DEFAULT.iter().collect(),
+                platform_defs: PLATFORMS_DEFAULT.iter().copied().collect(),
             },
         };
         backend.start(problem, None).context("Error starting solver")?;
-        let (instance, decoder) = encoding.with_limits(&limits);
-        let (cnf, _var_manager) = instance.into_cnf();
+        // TODO interrupter
 
-        let (solver_future, interrupter) = run_solver(GlucoseSimp::default(), cnf)?;
+        let result = backend
+            .response_future()
+            .await
+            .context("Expected a session to be active")?
+            .context("Solver error")?;
 
-        // TODO: Backend future for try_recv
-
-        let (result, solver) = solver_future.future().await?;
-        let layout = match result {
-            SolverResult::Sat => decoder.decode_assignment(&solver.full_solution()?),
-            SolverResult::Unsat => {
+        let solution = match result.response {
+            SolverResponse::Sat(solution) => solution,
+            SolverResponse::Unsat => {
                 println!("No solution found for the current constraints");
                 return Ok(());
             }
-            SolverResult::Interrupted => {
+            SolverResponse::Interrupted => {
                 println!("Solver interrupted");
                 return Ok(());
             }
         };
+
+        let layout = solution.layout;
+        limits = result.session_data.limits;
 
         if layout.platform_count() == 0 {
             println!("Found a solution with no platforms - aborting");
@@ -385,7 +388,8 @@ async fn solver_loop(
             }
         }
 
-        info!("Solver stats:\n{:#?}", solver.stats());
+        // TODO Solver stats in Solution
+        // info!("Solver stats:\n{:#?}", solver.stats());
         print_world(&project.world, Some(&layout), &validation);
     }
 }

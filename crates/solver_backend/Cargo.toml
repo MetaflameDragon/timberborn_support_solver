@@ -13,6 +13,7 @@ timberborn-platform-cruncher = { path = "../../." }
 
 log = "0.4.27"
 anyhow = "1.0.99"
+thiserror = "2.0.16"
 serde = { version = "1.0.219", features = ["derive"] }
 
 futures-channel = { version = "0.3.31", optional = true }
