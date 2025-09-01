@@ -13,27 +13,22 @@ use anyhow::{Context, bail};
 use clap::{CommandFactory, Parser, Subcommand};
 use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
-use rustsat::solvers::{InterruptSolver, Solve, SolveStats, SolverResult};
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
 use solver_backend::{
-    SessionResult, SolverBackend, SolverResponse,
-    backends::native_solver::{ChannelClosed, NativeSolver},
+    SolverBackend, SolverResponse,
+    backends::native_solver::NativeSolver,
     problem::{Problem, SessionData, StaticData},
 };
 use thiserror::Error;
 use timberborn_platform_cruncher::{
     Project, encoder,
-    encoder::{Encoding, PlatformLayout, PlatformLimits, ValidationResult},
+    encoder::{PlatformLayout, PlatformLimits, ValidationResult},
     math::{Dimensions, Grid},
     platform::{PLATFORMS_DEFAULT, PlatformDef},
     platform_def,
     world::World,
 };
 use tokio_util::{future::FutureExt, sync::CancellationToken};
-
-use crate::solver_runner::run_solver;
-
-mod solver_runner;
 
 #[derive(Debug, Parser)]
 #[command(multicall = true, arg_required_else_help = true, subcommand_required = true)]
@@ -262,11 +257,7 @@ async fn repl_loop() -> anyhow::Result<()> {
                     bail!("No project loaded");
                 };
 
-                let encoding = Encoding::encode(&PLATFORMS_DEFAULT, project.world.grid());
-
-                solver_loop(backend, project, &encoding, limits)
-                    .await
-                    .context("Error while solving")?;
+                solver_loop(backend, project, limits).await.context("Error while solving")?;
 
                 println!("Done");
 
@@ -293,7 +284,6 @@ fn load_project(path: &Path) -> anyhow::Result<Project> {
 async fn solver_loop(
     backend: &mut NativeSolver<GlucoseSimp>,
     project: &Project,
-    encoding: &Encoding,
     mut limits: PlatformLimits,
 ) -> anyhow::Result<()> {
     // Rather than a reverse for loop, this repeatedly looks for a solution with a
