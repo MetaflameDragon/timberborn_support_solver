@@ -6,7 +6,7 @@ use log::{info, warn};
 use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
 use serde::{Deserialize, Serialize};
 use solver_backend::{
-    SessionState, SolverBackend, SolverBackendResponse, SolverResponse,
+    SessionResult, SessionState, SolverBackend, SolverResponse,
     problem::{Problem, SessionData, Solution},
 };
 use timberborn_platform_cruncher::encoder::Encoding;
@@ -183,7 +183,7 @@ impl SolverBackend for WasmSolverBackend {
         }
     }
 
-    fn try_recv(&mut self) -> Option<Result<SolverBackendResponse, anyhow::Error>> {
+    fn try_recv(&mut self) -> Option<Result<SessionResult, anyhow::Error>> {
         let session = self.session.as_mut()?;
 
         let tx_result = session.rx.try_recv().transpose()?;
@@ -202,7 +202,7 @@ impl SolverBackend for WasmSolverBackend {
                     SolverResponse::Interrupted => return None,
                 };
 
-                Some(Ok(SolverBackendResponse { solution, session_data: session.session_data }))
+                Some(Ok(SessionResult { response: solution, session_data: session.session_data }))
             }
             Err(_) => {
                 // The channel might be closed if the solver was interrupted

@@ -4,9 +4,8 @@ use crate::problem::{Problem, SessionData, Solution};
 
 #[derive(Clone, Debug)]
 #[derive(Serialize, Deserialize)]
-pub struct SolverBackendResponse {
-    /// `Some` if SAT, `None` if UNSAT
-    pub solution: Option<Solution>,
+pub struct SessionResult {
+    pub response: SolverResponse,
     /// Data and parameters for the current solution
     pub session_data: SessionData,
 }
@@ -23,6 +22,8 @@ pub enum SessionState {
 }
 
 pub trait SolverBackend {
+    type RecvError;
+
     // TODO: better error type
     fn start(
         &mut self,
@@ -34,14 +35,25 @@ pub trait SolverBackend {
 
     fn interrupt(&mut self);
 
-    // TODO: better error type
-    fn try_recv(&mut self) -> Option<Result<SolverBackendResponse, anyhow::Error>>;
+    fn try_recv(&mut self) -> Option<Result<SessionResult, Self::RecvError>>;
 }
 
-// TODO: is this necessary?
 #[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize)]
 pub enum SolverResponse {
     Sat(Solution),
     Unsat,
     Interrupted,
+}
+
+impl SolverResponse {
+    /// Unwraps the solution into an [`Option`].
+    ///
+    /// Analogous to [`Result::ok`].
+    pub fn solution(self) -> Option<Solution> {
+        match self {
+            SolverResponse::Sat(solution) => Some(solution),
+            _ => None,
+        }
+    }
 }

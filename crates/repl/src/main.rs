@@ -15,6 +15,11 @@ use log::{error, info, trace, warn};
 use owo_colors::OwoColorize;
 use rustsat::solvers::{InterruptSolver, Solve, SolveStats, SolverResult};
 use rustsat_glucose::simp::Glucose as GlucoseSimp;
+use solver_backend::{
+    SolverBackend,
+    backends::native_solver::NativeSolver,
+    problem::{Problem, SessionData, StaticData},
+};
 use thiserror::Error;
 use timberborn_platform_cruncher::{
     Project, encoder,
@@ -188,6 +193,8 @@ async fn repl_loop() -> anyhow::Result<()> {
 
     let mut state = State { loaded_project: None, dims_platform_map };
 
+    let mut backend = NativeSolver::new(tokio::runtime::Handle::current());
+
     loop {
         if let Some(LoadedProject { project: _project, path }) = &state.loaded_project {
             // Try to show just the file name, fall back to the whole path
@@ -212,12 +219,16 @@ async fn repl_loop() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        if let Err(err) = run_cmd(cmd, &mut state).await {
+        if let Err(err) = run_cmd(&mut backend, cmd, &mut state).await {
             error!("{err}");
         }
     }
 
-    async fn run_cmd(cmd: ReplCommand, state: &mut State) -> anyhow::Result<()> {
+    async fn run_cmd(
+        backend: &mut NativeSolver<GlucoseSimp>,
+        cmd: ReplCommand,
+        state: &mut State,
+    ) -> anyhow::Result<()> {
         match cmd {
             ReplCommand::Load { path } => {
                 state.loaded_project = Some(LoadedProject { project: load_project(&path)?, path });
@@ -253,7 +264,9 @@ async fn repl_loop() -> anyhow::Result<()> {
 
                 let encoding = Encoding::encode(&PLATFORMS_DEFAULT, project.world.grid());
 
-                solver_loop(project, &encoding, limits).await.context("Error while solving")?;
+                solver_loop(backend, project, &encoding, limits)
+                    .await
+                    .context("Error while solving")?;
 
                 println!("Done");
 
@@ -278,6 +291,7 @@ fn load_project(path: &Path) -> anyhow::Result<Project> {
 }
 
 async fn solver_loop(
+    backend: &mut NativeSolver<GlucoseSimp>,
     project: &Project,
     encoding: &Encoding,
     mut limits: PlatformLimits,
@@ -287,41 +301,54 @@ async fn solver_loop(
     // high initial estimate, the SAT solver is likely to find a much more efficient
     // solution, and the solver doesn't step down by one each time unnecessarily.
 
+    // TODO: Backend interrupter that is Send
+
+    let ctrl_c_cancellation = CancellationToken::new();
+    tokio::spawn({
+        let cancel = ctrl_c_cancellation.clone();
+        async move {
+            trace!(target: "solver_interrupter", "Interrupt listener ready");
+            // TODO: better ctrl-c/interrupt handling
+            // Example: on unix, this listener will continue to capture SIGINT even after
+            // going out of scope, which might eat further SIGINTs if the program gets stuck
+            // elsewhere etc.
+            // Also, solver.start() takes a moment to run, and the user can press Ctrl-C
+            // during that time
+            // A global Ctrl-C listener that can cancel this whole task might be better
+
+            match tokio::signal::ctrl_c().with_cancellation_token_owned(cancel).await {
+                None => {
+                    trace!(target: "solver_interrupter", "Interrupt listener canceled");
+                }
+                Some(Ok(())) => {
+                    println!("Aborting...");
+                    // interrupter.interrupt(); // TODO
+                }
+                Some(Err(err)) => {
+                    error!("Interrupt listener error: {err}");
+                }
+            }
+        }
+    });
+
+    let _guard = ctrl_c_cancellation.drop_guard();
+
     loop {
         // info!("Solving for n <= {}...", run_config.max_platforms());
+        let problem = Problem {
+            session_data: SessionData { limits },
+            static_data: StaticData {
+                world: project.world.clone(),
+                platform_defs: PLATFORMS_DEFAULT.iter().collect(),
+            },
+        };
+        backend.start(problem, None).context("Error starting solver")?;
         let (instance, decoder) = encoding.with_limits(&limits);
         let (cnf, _var_manager) = instance.into_cnf();
 
         let (solver_future, interrupter) = run_solver(GlucoseSimp::default(), cnf)?;
 
-        let ctrl_c_cancellation = CancellationToken::new();
-        tokio::spawn({
-            let cancel = ctrl_c_cancellation.clone();
-            async move {
-                trace!(target: "solver_interrupter", "Interrupt listener ready");
-                // TODO: better ctrl-c/interrupt handling
-                // Example: on unix, this listener will continue to capture SIGINT even after
-                // going out of scope, which might eat further SIGINTs if the program gets stuck
-                // elsewhere etc.
-                // Also, solver.start() takes a moment to run, and the user can press Ctrl-C
-                // during that time
-                // A global Ctrl-C listener that can cancel this whole task might be better
-
-                match tokio::signal::ctrl_c().with_cancellation_token_owned(cancel).await {
-                    None => {
-                        trace!(target: "solver_interrupter", "Interrupt listener canceled");
-                    }
-                    Some(Ok(())) => {
-                        println!("Aborting...");
-                        interrupter.interrupt();
-                    }
-                    Some(Err(err)) => {
-                        error!("Interrupt listener error: {err}");
-                    }
-                }
-            }
-        });
-        let _guard = ctrl_c_cancellation.drop_guard();
+        // TODO: Backend future for try_recv
 
         let (result, solver) = solver_future.future().await?;
         let layout = match result {

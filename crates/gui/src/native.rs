@@ -11,7 +11,7 @@ where
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
     // Backend
-    let backend = NativeSolver::<S>::new(rt);
+    let backend = NativeSolver::<S>::new(rt.handle().clone());
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

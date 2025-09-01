@@ -3346,6 +3346,7 @@ dependencies = [
  "rustsat",
  "rustsat-glucose",
  "shlex",
+ "solver-backend",
  "thiserror 2.0.16",
  "timberborn-platform-cruncher",
  "tokio",

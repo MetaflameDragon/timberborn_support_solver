@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 timberborn-platform-cruncher = { path = "../../." }
+solver-backend = { path = "../solver_backend", features = ["backend_rustsat_tokio", "rustsat-glucose"] }
 
 log = "0.4.27"
 env_logger = "0.11.8"

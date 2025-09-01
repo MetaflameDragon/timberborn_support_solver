@@ -1,4 +1,7 @@
-use std::ops::{ControlFlow, Range};
+use std::{
+    fmt::Debug,
+    ops::{ControlFlow, Range},
+};
 
 #[allow(unused_imports)] // Keeping this Anyhow import as Context would clash with egui
 use anyhow::Context as _;
@@ -9,7 +12,7 @@ use egui::{
 };
 use log::{error, info};
 use solver_backend::{
-    SolverBackend, SolverBackendResponse,
+    SessionResult, SolverBackend, SolverResponse,
     problem::{Problem, SessionData, StaticData},
 };
 use timberborn_platform_cruncher::{
@@ -139,7 +142,10 @@ impl<Backend: SolverBackend> App<Backend> {
         .response
     }
 
-    fn try_get_current_session_results(&mut self) -> Option<SolverBackendResponse> {
+    fn try_get_current_session_results(&mut self) -> Option<SessionResult>
+    where
+        <Backend as SolverBackend>::RecvError: Debug,
+    {
         self.backend.try_recv()?.map_err(|err| error!("{:?}", err)).ok()
     }
 
@@ -167,34 +173,46 @@ impl<Backend: SolverBackend> App<Backend> {
         World::new(world_grid)
     }
 
-    fn process_active_session(&mut self, ctx: &Context) -> Option<()> {
+    fn process_active_session(&mut self, ctx: &Context) -> Option<()>
+    where
+        <Backend as SolverBackend>::RecvError: Debug,
+    {
         let results = self.try_get_current_session_results()?;
 
-        if let Some(solution) = results.solution {
-            info!("Sat");
+        match results.response {
+            SolverResponse::Sat(solution) => {
+                info!("Sat");
 
-            let mut limits = results.session_data.limits;
-            let weight = solution.layout.total_weight(&limits.weights);
+                let mut limits = results.session_data.limits;
+                let weight = solution.layout.total_weight(&limits.weights);
 
-            info!("Got a solution with weight {weight}");
-            self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
-            self.displayed_layout = Some(solution.layout);
+                info!("Got a solution with weight {weight}");
+                self.layout_stats.weight.add(ctx.input(|i| i.time), weight);
+                self.displayed_layout = Some(solution.layout);
 
-            if let Some(weight_subtracted) = weight.checked_sub(1)
-                && weight_subtracted > 0
-            {
-                limits.weight_limit = Some(weight_subtracted);
-                self.start_solver(ctx.clone(), limits);
+                if let Some(weight_subtracted) = weight.checked_sub(1)
+                    && weight_subtracted > 0
+                {
+                    limits.weight_limit = Some(weight_subtracted);
+                    self.start_solver(ctx.clone(), limits);
+                }
             }
-        } else {
-            info!("Unsat");
+            SolverResponse::Unsat => {
+                info!("Unsat");
+            }
+            SolverResponse::Interrupted => {
+                info!("Interrupted");
+            }
         }
 
         Some(())
     }
 }
 
-impl<Backend: SolverBackend> eframe::App for App<Backend> {
+impl<Backend: SolverBackend> eframe::App for App<Backend>
+where
+    <Backend as SolverBackend>::RecvError: Debug,
+{
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
         self.frame_history.on_new_frame(ctx.input(|i| i.time), frame.info().cpu_usage);
 
