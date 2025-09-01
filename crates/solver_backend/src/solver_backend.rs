@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::problem::{Problem, SessionData, Solution};
 
@@ -57,3 +58,10 @@ impl SolverResponse {
         }
     }
 }
+
+/// A common helper type intended for [`SolverBackend`]'s
+/// [`RecvError`][`SolverBackend::RecvError`].
+#[derive(Copy, Clone, Debug, Error)]
+#[derive(Serialize, Deserialize)]
+#[error("channel closed")]
+pub struct ChannelClosed;

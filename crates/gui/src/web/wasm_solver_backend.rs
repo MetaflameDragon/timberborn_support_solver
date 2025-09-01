@@ -1,13 +1,14 @@
 use std::sync::{Arc, OnceLock, atomic, atomic::AtomicBool};
 
 use batsat::callbacks::{AsyncInterrupt, AsyncInterruptHandle};
-use futures_channel::oneshot;
-use log::{info, warn};
+use futures_channel::{oneshot, oneshot::Canceled};
+use log::{trace, warn};
 use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
 use serde::{Deserialize, Serialize};
 use solver_backend::{
-    SessionResult, SessionState, SolverBackend, SolverResponse,
+    ChannelClosed, SessionResult, SessionState, SolverBackend, SolverResponse,
     problem::{Problem, SessionData, Solution},
+    utils::take_if_some,
 };
 use timberborn_platform_cruncher::encoder::Encoding;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
@@ -87,6 +88,8 @@ impl WasmSolverBackend {
 }
 
 impl SolverBackend for WasmSolverBackend {
+    type RecvError = ChannelClosed;
+
     fn start(
         &mut self,
         problem: Problem,
@@ -183,38 +186,38 @@ impl SolverBackend for WasmSolverBackend {
         }
     }
 
-    fn try_recv(&mut self) -> Option<Result<SessionResult, anyhow::Error>> {
-        let session = self.session.as_mut()?;
+    fn try_recv(&mut self) -> Option<Result<SessionResult, ChannelClosed>> {
+        // return None if there's no session active, or if there's no response yet
+        let (session, tx_result) =
+            take_if_some(&mut self.session, |s| s.rx.try_recv().transpose())?;
 
-        let tx_result = session.rx.try_recv().transpose()?;
-        // Set session to None if a response has been returned
-        let session = self.session.take().unwrap();
-
-        match tx_result {
-            Ok(solver_response) => {
-                if session.was_interrupted() {
-                    info!("Solver was interrupted previously - disregarding response");
-                    return None;
-                }
-                let solution = match solver_response {
-                    SolverResponse::Sat(solution) => Some(solution),
-                    SolverResponse::Unsat => None,
-                    SolverResponse::Interrupted => return None,
-                };
-
-                Some(Ok(SessionResult { response: solution, session_data: session.session_data }))
-            }
-            Err(_) => {
-                // The channel might be closed if the solver was interrupted
-                // It should return an Interrupted response, but this only warns if it
-                // closes unexpectedly
-                if !session.was_interrupted() {
-                    warn!(target: "solver backend", "Session channel was unexpectedly closed");
-                }
-                None
-            }
-        }
+        Some(process_tx_result(tx_result, session.was_interrupted(), session.session_data))
     }
+}
+
+// TODO: unify with native_solver?
+fn process_tx_result(
+    tx_result: Result<SolverResponse, Canceled>,
+    was_interrupted: bool,
+    session_data: SessionData,
+) -> Result<SessionResult, ChannelClosed> {
+    // The channel might be closed if the solver was interrupted
+    // It should respond with Interrupted, so this is always reported as a warning
+
+    let response = tx_result
+        .inspect_err(|_| warn!("Session channel closed unexpectedly"))
+        .map_err(|_| ChannelClosed)?;
+
+    trace!("Received response: {:?}", response);
+
+    // The solver might still return a response even if it has been interrupted
+    // Currently, this response is simply dropped
+    if was_interrupted {
+        trace!("Solver was interrupted previously - dropping response");
+        return Ok(SessionResult { response: SolverResponse::Interrupted, session_data });
+    }
+
+    Ok(SessionResult { response, session_data })
 }
 
 fn start_worker(path: &str) -> Result<Worker, JsValue> {

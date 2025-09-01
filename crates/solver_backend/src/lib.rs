@@ -1,6 +1,8 @@
 pub mod backends;
 pub mod problem;
 mod solver_backend;
-mod utils;
+pub mod utils;
 
-pub use solver_backend::{SessionResult, SessionState, SolverBackend, SolverResponse};
+pub use solver_backend::{
+    ChannelClosed, SessionResult, SessionState, SolverBackend, SolverResponse,
+};

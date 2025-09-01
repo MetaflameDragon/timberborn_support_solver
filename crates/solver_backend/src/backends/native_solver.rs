@@ -10,6 +10,7 @@ use timberborn_platform_cruncher::encoder::Encoding;
 use crate::{
     SessionResult, SessionState, SolverBackend, SolverResponse,
     problem::{Problem, SessionData, Solution},
+    solver_backend::ChannelClosed,
     utils::take_if_some,
 };
 
@@ -142,11 +143,6 @@ where
         Some(process_tx_result(tx_result, session.was_interrupted(), session.session_data))
     }
 }
-
-#[derive(Copy, Clone, Debug, Error)]
-#[derive(Serialize, Deserialize)]
-#[error("channel closed")]
-pub struct ChannelClosed;
 
 fn process_tx_result(
     tx_result: Result<SolverResponse, Canceled>,
