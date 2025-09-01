@@ -3093,8 +3093,13 @@ name = "solver-backend"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-channel",
+ "log",
+ "rustsat",
+ "rustsat-glucose",
  "serde",
  "timberborn-platform-cruncher",
+ "tokio",
 ]
 
 [[package]]

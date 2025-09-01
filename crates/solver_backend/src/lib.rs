@@ -1,3 +1,4 @@
+pub mod backends;
 pub mod problem;
 mod solver_backend;
 

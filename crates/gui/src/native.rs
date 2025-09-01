@@ -1,9 +1,6 @@
-use rustsat::solvers::{Interrupt, InterruptSolver, Solve, SolveStats};
+use rustsat::solvers::{Solve, SolveStats};
+use solver_backend::backends::native_solver::{InterruptableSolver, NativeSolver};
 use timberborn_platform_cruncher_gui::app;
-
-use crate::native::native_solver::{InterruptableSolver, NativeSolver};
-
-mod native_solver;
 
 pub fn run<S>() -> anyhow::Result<()>
 where
@@ -30,16 +27,4 @@ where
     .expect("Error while running frontend");
 
     Ok(())
-}
-
-impl InterruptableSolver for rustsat_glucose::simp::Glucose {
-    type Interrupter = rustsat_glucose::simp::Interrupter;
-
-    fn get_interrupter(&mut self) -> Self::Interrupter {
-        self.interrupter()
-    }
-
-    fn interrupt(interrupter: &Self::Interrupter) {
-        interrupter.interrupt();
-    }
 }

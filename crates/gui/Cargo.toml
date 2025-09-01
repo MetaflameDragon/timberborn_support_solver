@@ -15,11 +15,8 @@ web_app = []
 glow = ["eframe/glow"]
 wgpu = ["eframe/wgpu", "bytemuck", "dep:wgpu"]
 
-
-
 [dependencies]
 timberborn-platform-cruncher = { path = "../../." }
-solver-backend = { path = "../solver_backend" }
 egui = "0.32.1"
 log = "0.4.27"
 rustsat = { version = "0.7.3", features = ["serde"] }
@@ -39,12 +36,14 @@ wgpu = { version = "25.0.0", features = ["webgpu", "webgl"], optional = true }
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11.8"
+solver-backend = { path = "../solver_backend", features = ["backend_rustsat_tokio", "rustsat-glucose"] }
 rustsat-glucose = { version = "0.7.3", features = [] }
 tokio = { version = "1.47.1", features = ["rt-multi-thread", "rt", "macros", "signal"] }
 tokio-util = "0.7.16"
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+solver-backend = { path = "../solver_backend" }
 rustsat-batsat = { version = "0.7.3", features = [] }
 batsat = "0.6.0"
 wasm-bindgen = "=0.2.100" # Note: this must match wasm-bindgen exactly!

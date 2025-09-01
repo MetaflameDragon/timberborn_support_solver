@@ -4,11 +4,12 @@ use anyhow::Error;
 use futures_channel::oneshot;
 use log::{error, info, trace, warn};
 use rustsat::solvers::{Solve, SolveStats, SolverResult};
-use solver_backend::{
+use timberborn_platform_cruncher::encoder::Encoding;
+
+use crate::{
     SessionState, SolverBackend, SolverBackendResponse, SolverResponse,
     problem::{Problem, SessionData, Solution},
 };
-use timberborn_platform_cruncher::encoder::Encoding;
 
 pub struct NativeSolver<S: InterruptableSolver> {
     rt: tokio::runtime::Runtime,
@@ -178,5 +179,28 @@ impl<S: InterruptableSolver> SolverSession<S> {
     pub fn interrupt(&self) {
         self.was_interrupted.store(true, atomic::Ordering::SeqCst);
         S::interrupt(&self.interrupter);
+    }
+}
+
+mod rustsat_impls {
+    use crate::backends::native_solver::InterruptableSolver;
+
+    #[cfg(feature = "rustsat-glucose")]
+    mod glucose {
+        use rustsat::solvers::{Interrupt, InterruptSolver};
+
+        use super::InterruptableSolver;
+
+        impl InterruptableSolver for rustsat_glucose::simp::Glucose {
+            type Interrupter = rustsat_glucose::simp::Interrupter;
+
+            fn get_interrupter(&mut self) -> Self::Interrupter {
+                self.interrupter()
+            }
+
+            fn interrupt(interrupter: &Self::Interrupter) {
+                interrupter.interrupt();
+            }
+        }
     }
 }
