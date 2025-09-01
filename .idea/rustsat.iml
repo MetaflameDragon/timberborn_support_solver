@@ -10,6 +10,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/repl/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/solver_backend/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/logs" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />

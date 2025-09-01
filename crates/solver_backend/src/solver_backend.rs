@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::solver_backend::problem::{Problem, SessionData, Solution};
-
-pub mod problem;
+use crate::problem::{Problem, SessionData, Solution};
 
 #[derive(Clone, Debug)]
 #[derive(Serialize, Deserialize)]
@@ -40,6 +38,7 @@ pub trait SolverBackend {
     fn try_recv(&mut self) -> Option<Result<SolverBackendResponse, anyhow::Error>>;
 }
 
+// TODO: is this necessary?
 #[derive(Debug, Clone)]
 pub enum SolverResponse {
     Sat(Solution),

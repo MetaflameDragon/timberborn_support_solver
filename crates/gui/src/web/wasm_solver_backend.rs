@@ -5,14 +5,13 @@ use futures_channel::oneshot;
 use log::{info, warn};
 use rustsat::solvers::{InterruptSolver, Solve, SolverResult};
 use serde::{Deserialize, Serialize};
-use timberborn_platform_cruncher::encoder::Encoding;
-use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
-use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
-
-use crate::solver_backend::{
+use solver_backend::{
     SessionState, SolverBackend, SolverBackendResponse, SolverResponse,
     problem::{Problem, SessionData, Solution},
 };
+use timberborn_platform_cruncher::encoder::Encoding;
+use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
+use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, Worker};
 
 #[derive(Default)]
 pub struct OnceLockInterrupter {

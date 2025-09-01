@@ -19,6 +19,7 @@ wgpu = ["eframe/wgpu", "bytemuck", "dep:wgpu"]
 
 [dependencies]
 timberborn-platform-cruncher = { path = "../../." }
+solver-backend = { path = "../solver_backend" }
 egui = "0.32.1"
 log = "0.4.27"
 rustsat = { version = "0.7.3", features = ["serde"] }

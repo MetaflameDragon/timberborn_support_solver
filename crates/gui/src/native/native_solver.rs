@@ -4,11 +4,11 @@ use anyhow::Error;
 use futures_channel::oneshot;
 use log::{error, info, trace, warn};
 use rustsat::solvers::{Solve, SolveStats, SolverResult};
-use timberborn_platform_cruncher::encoder::Encoding;
-use timberborn_platform_cruncher_gui::solver_backend::{
+use solver_backend::{
     SessionState, SolverBackend, SolverBackendResponse, SolverResponse,
     problem::{Problem, SessionData, Solution},
 };
+use timberborn_platform_cruncher::encoder::Encoding;
 
 pub struct NativeSolver<S: InterruptableSolver> {
     rt: tokio::runtime::Runtime,

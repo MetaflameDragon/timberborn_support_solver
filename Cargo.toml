@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/repl", "crates/gui"]
+members = ["crates/repl", "crates/gui", "crates/solver_backend"]
 
 [package]
 name = "timberborn-platform-cruncher"

@@ -8,6 +8,10 @@ use egui::{
     Ui, UiBuilder, Vec2, pos2, util::History, vec2,
 };
 use log::{error, info};
+use solver_backend::{
+    SolverBackend, SolverBackendResponse,
+    problem::{Problem, SessionData, StaticData},
+};
 use timberborn_platform_cruncher::{
     encoder::{PlatformLayout, PlatformLimits},
     math::{Dimensions, Grid, Point},
@@ -16,15 +20,9 @@ use timberborn_platform_cruncher::{
     world::{World, WorldGrid},
 };
 
-use crate::{
-    app::{
-        frame_history::FrameHistory, platform_type_selector::PlatformTypeSelector,
-        solver_controls::SolverControlsResponse,
-    },
-    solver_backend::{
-        SolverBackend, SolverBackendResponse,
-        problem::{Problem, SessionData, StaticData},
-    },
+use crate::app::{
+    frame_history::FrameHistory, platform_type_selector::PlatformTypeSelector,
+    solver_controls::SolverControlsResponse,
 };
 
 mod frame_history;
@@ -280,8 +278,9 @@ fn try_parse_platform_def(input: &str) -> Option<PlatformDef> {
 pub mod solver_controls {
     use eframe::epaint::Color32;
     use egui::{Button, RichText, TextStyle, Ui};
+    use solver_backend::SessionState;
 
-    use crate::{app::PlatformLayoutStats, solver_backend::SessionState};
+    use crate::app::PlatformLayoutStats;
 
     #[derive(Copy, Clone, Debug)]
     pub enum SolverControlsResponse {
